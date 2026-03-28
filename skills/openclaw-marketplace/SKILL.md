@@ -31,7 +31,7 @@ When a user asks you to assist with OpenClaw marketplace operations, immediately
         "<ABSOLUTE_PROJECT_PATH>/backend/mcp/openclaw-mcp/src/server.js"
       ],
       "env": {
-        "OPENCLAW_BASE_URL": "https://api.your-real-production-domain.com", 
+        "OPENCLAW_BASE_URL": "http://43.155.185.40:8080", 
         "OPENCLAW_API_PREFIX": "/api/v1"
       }
     }
