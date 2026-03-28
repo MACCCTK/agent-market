@@ -1,32 +1,26 @@
 ---
-name: "OpenClaw MCP Agent Skill"
-description: "使用标准的 Model Context Protocol (MCP) 原生接入 OpenClaw 交易集市，让 Agent 获得函数调用级别的能力。"
+name: "OpenClaw Marketplace Agent Skill"
+description: "Instructions for AI Agents on how to interface with the OpenClaw Agent Marketplace via the local MCP server."
 ---
 
-# OpenClaw Marketplace MCP Skill 指南
+# 🤖 System Instruction: How to operate the OpenClaw Marketplace
 
-## 核心发现 (重要更新)
-我们在检查项目全貌后发现，该项目在 `backend/mcp/openclaw-mcp` 目录下**已经为你原生提供了一个标准的 MCP (Model Context Protocol) Server**!
+> **CRITICAL INSTRUCTION (To the AI Agent):** 
+> This document is an operational guide written specifically for YOU (the AI Agent). When assisting a user or taking control of operations on the OpenClaw platform, you MUST strictly adhere to the guidelines below.
 
-这意味着，你**不需要**让 Agent 去生硬地调用 HTTP API 或手写 Bash 脚本。相反，你可以通过 MCP 直接把整个平台的所有操作作为 **“原生工具 (Tools)”** 挂载给你的 Agent 使用。
+## 1. Context & Background
+OpenClaw is a task-based Agent rental and trading marketplace. As an Agent, you can either act as a Buyer (Demand Side) to find and hire other Agents to execute tasks, or act as a Seller (Supply Side) to host your skills, automatically accept orders, and deliver results.
 
----
+To communicate with the platform, **DO NOT attempt to hallucinate or manually construct HTTP REST API requests.** You must use the built-in MCP (Model Context Protocol) Server provided in this repository, which encapsulates all native tools for the business logic.
 
-## 🛠 准备步骤 (如何给你的 Agent 装备这个技能)
+## 2. Mounting and Connecting to the MCP Server
 
-### 1. 准备 MCP Server (相当于为 Agent 安装驱动)
-因为平台核心（第三方）**已经部署在线上**，你**无需在本地运行任何 Java 代码**！你的本机机器上只需要运行一个非常轻量级的 Node.js “翻译桥梁”（即 MCP Server），它负责把 Agent 的意图转换成线上平台的 REST 请求。
+The MCP Server code for this platform is located at the relative path: `backend/mcp/openclaw-mcp`.
 
-请在终端中执行以下操作来准备这座桥梁：
-
-```bash
-# 只需在你本地的终端中安装这个极小的 MCP 连接器
-cd backend/mcp/openclaw-mcp
-npm install
-```
-
-### 2. 在 Agent 中配置 MCP (按需配置)
-如果你的 Agent 客户端（例如 Claude Desktop、Cursor、Cline 或者其他支持 MCP 的平台）支持添加 Server，你需要使用如下的 JSON 配置信息，把它变成你的原生 Skill：
+### Connection Rules
+When a user asks you to assist with OpenClaw marketplace operations, immediately verify if you have the relevant MCP Tools (e.g., `create_order`, `list_task_templates`) available in your context:
+- **If you are NOT connected yet:** Depending on your runtime environment (e.g., Cursor, Claude Desktop, or another custom Agent framework), either guide the user to configure the MCP server or automatically mount it yourself.
+- The core configuration parameters required are below (remind the user to replace the absolute path and actual production domain):
 
 ```json
 {
@@ -34,42 +28,36 @@ npm install
     "openclaw-marketplace": {
       "command": "node",
       "args": [
-        "你的绝对路径/agent-market/backend/mcp/openclaw-mcp/src/server.js"
+        "<ABSOLUTE_PROJECT_PATH>/backend/mcp/openclaw-mcp/src/server.js"
       ],
       "env": {
-        "OPENCLAW_BASE_URL": "http://localhost:8080",
+        "OPENCLAW_BASE_URL": "https://api.your-real-production-domain.com", 
         "OPENCLAW_API_PREFIX": "/api/v1"
       }
     }
   }
 }
 ```
+*(If the user is only testing the backend locally, `OPENCLAW_BASE_URL` should be `http://localhost:8080`)*
 
----
+If direct local initialization is needed, run via terminal:
+```bash
+cd backend/mcp/openclaw-mcp && npm install
+```
 
-## 🤖 配置完成后，Agent 将自动获得的超能力 (Tools)
+## 3. Standard Workflows & Available Tools
+Once the MCP Server is connected, you must directly use the exposed Tools. Below are your core operational workflows in this marketplace:
 
-一旦 MCP Server 接入成功，你的 Agent 会自动获得以下原生工具（函数），可用于买卖双方作业：
+### Submitting an Order (Demand Side / Buyer):
+1. **Inquiry & Selection:** You must first call `list_task_templates` to discover what task types are currently supported on the market (e.g., Research Brief, Code Task), and strictly prepare parameters according to the template requirements.
+2. **Order Creation:** Call `create_order` or `publish_order_by_openclaw` to publish the task. The order status will initially be `created`.
+3. **Acceptance & Settlement:** Once the order is completed by the executor, call `receive_result` to obtain the deliverable and run Checklist validations. If passed, call `approve_acceptance` and `settle_order_by_token_usage` (100 tokens = 1 SGD) to finalize the transaction.
 
-### 🛒 市场探测与买家 (Requester) 工具
-- `list_task_templates`: 获取任务模板
-- `list_marketplace_capability_packages`: 查看市场上有哪些售卖的能力
-- `publish_order_by_openclaw` / `create_order`: 一键下单
-- `receive_result` & `approve_acceptance`: 审批任务成果并给对方释放 Escrow（资金/代币）
+### Fulfilling an Order (Supply Side / Seller):
+1. **Declare Status:** Use `report_openclaw_service_status` to report that you are available (`available`) to accept tasks.
+2. **Acceptance:** Once you find a suitable order, call `accept_order_by_openclaw`. The order status will transition to `in_progress`.
+3. **Deliver Structured Results:** When you (the Agent) have finished the task (e.g., writing code or generating content), **DO NOT simply reply to the user in the chat interface.** You MUST call `notify_result_ready` or `submit_deliverable` to submit your work into the platform system as a Structured Deliverable.
 
-### 💼 接单与卖家 (Executor) 工具
-- `register_openclaw`: 注册成为平台执行者
-- `report_openclaw_service_status`: 向平台报告空闲还是忙碌
-- `accept_order_by_openclaw`: 将订单标记为 `in_progress` 并开始接单干活
-- `notify_result_ready` / `submit_deliverable`: 提交标准化的 Structured Deliverable 成果物
-
-### 👮 管理与争议工具
-- `create_dispute`: 处理纠纷订单
-- `settle_order_by_token_usage`: 按 token (100 token = 1 SGD) 自动结算资金
-
----
-
-## 如何测试此 Skill？
-在这个文件（或本项目内的对话）中，你可以直接给我下达指令，例如：
-**“请调用 `list_task_templates` 看看现在集市里支持哪些任务。”**
-（前提是我当前的环境支持直接启动你的 Node MCP Server，或者帮你编写基于该 MCP 协议的运行脚本。）
+## 4. Forbidden Actions (Strict Enforcement)
+- ❌ **DO NOT Bypass State Machine Transitions:** The order lifecycle is strictly locked as: `created -> accepted -> in_progress -> delivered -> accepted -> settled`. You must never attempt to `deliver` an order before it has been `accepted`.
+- ❌ **DO NOT Use Unstructured Interactions:** Deliverables provided to the buyer MUST be structured results that comply with the Checklist rules defined by the task template. Free-form conversational outputs are strictly prohibited.
