@@ -2,10 +2,12 @@ package com.example.demo.marketplace.v1.service;
 
 import com.example.demo.marketplace.v1.error.ApiException;
 import com.example.demo.marketplace.v1.model.V1OrderStatus;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.PropertyNamingStrategies;
 import com.fasterxml.jackson.databind.annotation.JsonNaming;
+import io.swagger.v3.oas.annotations.media.Schema;
 import java.math.BigDecimal;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -58,18 +60,23 @@ public class V1MarketplaceService {
 
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record HeartbeatView(
-        long openClawId,
+        @JsonProperty("openclaw_id") long openClawId,
         String serviceStatus,
         Long activeOrderId,
         OrderView assignedOrder,
         Instant checkedAt
     ) {
+        @Schema(hidden = true)
+        @JsonProperty("open_claw_id")
+        public long openClawIdLegacy() {
+            return openClawId;
+        }
     }
 
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record NotificationView(
         long id,
-        long openClawId,
+        @JsonProperty("openclaw_id") long openClawId,
         long orderId,
         String notificationType,
         String status,
@@ -80,6 +87,11 @@ public class V1MarketplaceService {
         Instant ackedAt,
         Instant updatedAt
     ) {
+        @Schema(hidden = true)
+        @JsonProperty("open_claw_id")
+        public long openClawIdLegacy() {
+            return openClawId;
+        }
     }
 
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
@@ -97,7 +109,7 @@ public class V1MarketplaceService {
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record SettlementFeeView(
         long orderId,
-        long openClawId,
+        @JsonProperty("openclaw_id") long openClawId,
         BigDecimal hireFee,
         long tokenUsed,
         BigDecimal tokenFee,
@@ -105,6 +117,11 @@ public class V1MarketplaceService {
         String currency,
         Instant settledAt
     ) {
+        @Schema(hidden = true)
+        @JsonProperty("open_claw_id")
+        public long openClawIdLegacy() {
+            return openClawId;
+        }
     }
 
     private static final Set<String> ALLOWED_ROLES = Set.of("openclaw", "admin");
@@ -135,7 +152,7 @@ public class V1MarketplaceService {
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record CapabilityPackageView(
         long id,
-        long ownerOpenClawId,
+        @JsonProperty("owner_openclaw_id") long ownerOpenClawId,
         String title,
         String summary,
         long taskTemplateId,
@@ -147,14 +164,19 @@ public class V1MarketplaceService {
         Instant createdAt,
         Instant updatedAt
     ) {
+        @Schema(hidden = true)
+        @JsonProperty("owner_open_claw_id")
+        public long ownerOpenClawIdLegacy() {
+            return ownerOpenClawId;
+        }
     }
 
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record OrderView(
         long id,
         String orderNo,
-        long requesterOpenClawId,
-        Long executorOpenClawId,
+        @JsonProperty("requester_openclaw_id") long requesterOpenClawId,
+        @JsonProperty("executor_openclaw_id") Long executorOpenClawId,
         long taskTemplateId,
         Long capabilityPackageId,
         String title,
@@ -170,6 +192,17 @@ public class V1MarketplaceService {
         Instant createdAt,
         Instant updatedAt
     ) {
+        @Schema(hidden = true)
+        @JsonProperty("requester_open_claw_id")
+        public long requesterOpenClawIdLegacy() {
+            return requesterOpenClawId;
+        }
+
+        @Schema(hidden = true)
+        @JsonProperty("executor_open_claw_id")
+        public Long executorOpenClawIdLegacy() {
+            return executorOpenClawId;
+        }
     }
 
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
@@ -472,6 +505,10 @@ public class V1MarketplaceService {
     public List<CapabilityPackageView> listMarketplacePackages(int page, int size, String sort) {
         List<CapabilityPackageView> active = capabilityPackages.values().stream().filter(p -> "active".equalsIgnoreCase(p.status())).toList();
         return pageAndSort(active, page, size, sort, Comparator.comparingLong(CapabilityPackageView::id));
+    }
+
+    public List<OrderView> listOrders(int page, int size, String sort) {
+        return pageAndSort(new ArrayList<>(orders.values()), page, size, sort, Comparator.comparingLong(OrderView::id));
     }
 
     public CapabilityPackageView createOwnerCapabilityPackage(

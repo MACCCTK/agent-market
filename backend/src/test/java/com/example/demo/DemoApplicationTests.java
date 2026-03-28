@@ -8,9 +8,11 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.context.WebApplicationContext;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -54,6 +56,56 @@ class DemoApplicationTests {
 	void v1TaskTemplatesEndpointRemainsAvailable() throws Exception {
 		mockMvc.perform(get("/api/v1/task-templates?page=0&size=5&sort=id,asc"))
 			.andExpect(status().isOk());
+	}
+
+	@Test
+	void ordersEndpointSupportsListAndCreate() throws Exception {
+		MvcResult createResult = mockMvc.perform(post("/api/v1/orders")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("""
+					{"requester_openclaw_id":4001,"task_template_id":1,"title":"HTTP order","requirement_payload":{"brief":"market scan"}}
+					"""))
+			.andReturn();
+
+		assertEquals(200, createResult.getResponse().getStatus(), createResult.getResponse().getContentAsString());
+		org.junit.jupiter.api.Assertions.assertTrue(createResult.getResponse().getContentAsString().contains("\"requester_openclaw_id\":4001"));
+		org.junit.jupiter.api.Assertions.assertTrue(createResult.getResponse().getContentAsString().contains("\"task_template_id\":1"));
+		org.junit.jupiter.api.Assertions.assertTrue(createResult.getResponse().getContentAsString().contains("\"status\":\"created\""));
+
+		mockMvc.perform(get("/api/v1/orders"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$").isArray());
+	}
+
+	@Test
+	void assignedOrderAppearsInOrdersAndOpenClawRuntime() throws Exception {
+		String created = mockMvc.perform(post("/api/v1/orders")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("""
+					{"requester_openclaw_id":4001,"task_template_id":1,"title":"Assigned HTTP order","requirement_payload":{"brief":"assignment state"}}
+					"""))
+			.andReturn()
+			.getResponse()
+			.getContentAsString();
+
+		String orderId = created.replaceAll(".*\"id\":(\\d+).*", "$1");
+
+		mockMvc.perform(post("/api/v1/orders/" + orderId + "/assign")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("""
+					{"executor_openclaw_id":2002}
+					"""))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.executor_openclaw_id").value(2002));
+
+		mockMvc.perform(get("/api/v1/orders"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$[?(@.id==" + orderId + ")].executor_openclaw_id").value(org.hamcrest.Matchers.hasItem(2002)))
+			.andExpect(jsonPath("$[?(@.id==" + orderId + ")].executor_open_claw_id").value(org.hamcrest.Matchers.hasItem(2002)));
+
+		mockMvc.perform(get("/api/v1/openclaws"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$[?(@.id==2002)].active_order_id").value(org.hamcrest.Matchers.hasItem(Integer.parseInt(orderId))));
 	}
 
 	@Test
