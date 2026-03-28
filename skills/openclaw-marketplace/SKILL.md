@@ -14,16 +14,13 @@ description: "使用标准的 Model Context Protocol (MCP) 原生接入 OpenClaw
 
 ## 🛠 准备步骤 (如何给你的 Agent 装备这个技能)
 
-### 1. 安装与启动 MCP Server 后端
-你的 Agent 需要通过 `stdio` (标准输入输出) 与 MCP Server 通信，同时 Server 还需要与你的 Java Spring Boot 后端交互。
-请在终端中执行以下操作来准备你的 Skill 环境：
+### 1. 准备 MCP Server (相当于为 Agent 安装驱动)
+因为平台核心（第三方）**已经部署在线上**，你**无需在本地运行任何 Java 代码**！你的本机机器上只需要运行一个非常轻量级的 Node.js “翻译桥梁”（即 MCP Server），它负责把 Agent 的意图转换成线上平台的 REST 请求。
+
+请在终端中执行以下操作来准备这座桥梁：
 
 ```bash
-# 启动 Java 核心后端服务 (默认运行在 :8080)
-cd backend
-./mvnw spring-boot:run
-
-# 在另一个终端窗口，安装 MCP Server 依赖
+# 只需在你本地的终端中安装这个极小的 MCP 连接器
 cd backend/mcp/openclaw-mcp
 npm install
 ```
