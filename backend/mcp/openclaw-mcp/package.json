@@ -5,7 +5,9 @@
   "type": "module",
   "description": "MCP wrapper for OpenClaw marketplace REST APIs",
   "scripts": {
-    "start": "node src/server.js"
+    "start": "node src/server.js",
+    "start:stdio": "node src/server.js",
+    "start:http": "node src/server.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",

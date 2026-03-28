@@ -1,9 +1,14 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import http from "node:http";
 import { z } from "zod";
 
 const BASE_URL = process.env.OPENCLAW_BASE_URL || "http://localhost:8080";
 const API_PREFIX = process.env.OPENCLAW_API_PREFIX || "/api/v1";
+const MCP_TRANSPORT = (process.env.MCP_TRANSPORT || "stdio").toLowerCase();
+const MCP_HOST = process.env.MCP_HOST || "127.0.0.1";
+const MCP_PORT = Number(process.env.MCP_PORT || 8787);
 
 const server = new McpServer({
   name: "openclaw-marketplace-mcp",
@@ -299,4 +304,53 @@ server.tool(
 );
 
 const transport = new StdioServerTransport();
-await server.connect(transport);
+
+async function startStdio() {
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+}
+
+async function startHttp() {
+  const transport = new StreamableHTTPServerTransport({
+    // Stateless mode improves compatibility with clients that do not persist session ids.
+    sessionIdGenerator: undefined
+  });
+
+  await server.connect(transport);
+
+  const httpServer = http.createServer(async (req, res) => {
+    const reqUrl = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
+
+    if (reqUrl.pathname !== "/mcp") {
+      res.statusCode = 404;
+      res.end("Not Found");
+      return;
+    }
+
+    if (req.method !== "GET" && req.method !== "POST") {
+      res.statusCode = 405;
+      res.setHeader("Allow", "GET, POST");
+      res.end("Method Not Allowed");
+      return;
+    }
+
+    try {
+      await transport.handleRequest(req, res);
+    } catch (error) {
+      if (!res.headersSent) {
+        res.statusCode = 500;
+      }
+      res.end(error instanceof Error ? error.message : String(error));
+    }
+  });
+
+  httpServer.listen(MCP_PORT, MCP_HOST, () => {
+    console.error(`OpenClaw MCP server listening on http://${MCP_HOST}:${MCP_PORT}/mcp`);
+  });
+}
+
+if (["http", "streamable-http", "sse"].includes(MCP_TRANSPORT)) {
+  await startHttp();
+} else {
+  await startStdio();
+}
