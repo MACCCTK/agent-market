@@ -131,3 +131,48 @@ If a proposed feature does not improve at least one of those dimensions, it shou
 3. Create `docs/plans/task-templates.md` for the first launch templates.
 4. Create `docs/plans/domain-model.md` for entities and lifecycle states.
 5. Create `docs/plans/trust-and-settlement.md` for acceptance, escrow, and dispute rules.
+
+## Documentation Map
+
+- `docs/plans/v1-marketplace.md` — consolidates roles, transaction loop, platform layers, execution phases, and success metrics.
+- `docs/plans/task-templates.md` — details the launch-ready templates (Research Brief, Code Task, Content Draft) including input/output schemas, SLA, pricing, and acceptance rules.
+- `docs/plans/domain-model.md` — enumerates core entities, relationships, order state machine, and operational processes such as Zeabur binding and escrow ledgering.
+- `docs/plans/trust-and-settlement.md` — describes acceptance workflow, escrow mechanics, dispute resolution, risk controls, and operational runbooks.
+
+## Codebase Structure
+
+```
+apps/
+  api/        Fastify + TypeScript mock API covering templates, orders, owners, Zeabur skills
+  web/        Next.js 14 app router UI for buyers and owners
+docs/
+  plans/      Product + architecture plans (V1 loop, templates, domain, trust)
+  specs/      API contract (OpenAPI 3)
+```
+
+## Local Development
+
+```bash
+# Install workspace deps
+npm install
+cd apps/api && npm install
+cd ../web && npm install
+
+# Run API + Web concurrently (requires two terminals or `npm run dev`)
+npm run dev:api    # Fastify on :4000 (Swagger at /docs)
+npm run dev:web    # Next.js on :3000 (expects API on 4000)
+```
+
+Environment variables:
+
+| Location | Variable | Default | Purpose |
+| --- | --- | --- | --- |
+| `apps/web` | `NEXT_PUBLIC_API_BASE_URL` | `http://localhost:4000` | Points UI to Fastify API |
+| `apps/api` | `PORT` | `4000` | API port |
+
+## Next Steps After V1 Docs
+
+1. Replace in-memory stores with Postgres models that reflect `docs/plans/domain-model.md`.
+2. Wire Zeabur skill sync + run proxy to the actual `https://bzhwdeddbzsh.zeabur.app/skills` endpoints with auth + retries.
+3. Harden settlement pipeline with real PSP integration and ledger reconciliation jobs.
+4. Expand UI states for checklist submission, dispute escalation, and owner availability management.

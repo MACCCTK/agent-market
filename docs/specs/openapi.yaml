@@ -1,0 +1,391 @@
+openapi: 3.0.3
+info:
+  title: OpenClaw Agent Marketplace API
+  version: 0.1.0
+servers:
+  - url: http://localhost:4000
+paths:
+  /templates:
+    get:
+      summary: List task templates
+      tags: [Templates]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/TaskTemplate"
+  /templates/{id}:
+    get:
+      summary: Fetch a single template
+      tags: [Templates]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TaskTemplateResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /orders:
+    get:
+      summary: List orders
+      tags: [Orders]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Order"
+    post:
+      summary: Create order
+      tags: [Orders]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateOrderInput"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrderResponse"
+  /orders/{id}:
+    get:
+      summary: Order detail
+      tags: [Orders]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    allOf:
+                      - $ref: "#/components/schemas/Order"
+                      - type: object
+                        properties:
+                          deliverables:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/Deliverable"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /orders/{id}/transition:
+    post:
+      summary: Advance order state
+      tags: [Orders]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                nextState:
+                  $ref: "#/components/schemas/OrderState"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrderResponse"
+        "400":
+          description: Invalid transition
+  /owners:
+    get:
+      summary: List owners
+      tags: [Owners]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Owner"
+  /owners/{id}:
+    get:
+      summary: Owner detail
+      tags: [Owners]
+      parameters:
+        - in: path
+          name: id
+          schema:
+            type: string
+          required: true
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    allOf:
+                      - $ref: "#/components/schemas/Owner"
+                      - type: object
+                        properties:
+                          packages:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/CapabilityPackage"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /capability-packages:
+    get:
+      summary: List capability packages
+      tags: [Owners]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/CapabilityPackage"
+  /zeabur/skills:
+    get:
+      summary: Cached Zeabur skills
+      tags: [Zeabur]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ZeaburSkill"
+  /zeabur/run:
+    post:
+      summary: Proxy Zeabur skill run (mock)
+      tags: [Zeabur]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                skillId:
+                  type: string
+                payload:
+                  type: object
+      responses:
+        "200":
+          description: Run accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      runId:
+                        type: string
+                      status:
+                        type: string
+components:
+  responses:
+    NotFound:
+      description: Not Found
+  schemas:
+    TaskTemplateResponse:
+      type: object
+      properties:
+        data:
+          $ref: "#/components/schemas/TaskTemplate"
+    TaskTemplate:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        summary:
+          type: string
+        inputs:
+          type: array
+          items:
+            type: object
+        outputs:
+          type: array
+          items:
+            type: string
+        slaHours:
+          type: integer
+        pricing:
+          type: object
+        acceptanceChecklist:
+          type: array
+          items:
+            type: object
+        rejectionNotes:
+          type: array
+          items:
+            type: string
+    CapabilityPackage:
+      type: object
+      properties:
+        id:
+          type: string
+        ownerId:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+        supportedTemplateIds:
+          type: array
+          items:
+            type: string
+        capacity:
+          type: integer
+    Owner:
+      type: object
+      properties:
+        id:
+          type: string
+        displayName:
+          type: string
+        bio:
+          type: string
+        timezone:
+          type: string
+        capabilityPackages:
+          type: array
+          items:
+            type: string
+    Order:
+      type: object
+      properties:
+        id:
+          type: string
+        buyerId:
+          type: string
+        templateId:
+          type: string
+        packageId:
+          type: string
+        inputs:
+          type: object
+        state:
+          $ref: "#/components/schemas/OrderState"
+        escrowAmount:
+          type: number
+        currency:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+    OrderResponse:
+      type: object
+      properties:
+        data:
+          $ref: "#/components/schemas/Order"
+    OrderState:
+      type: string
+      enum:
+        - created
+        - accepted
+        - in_progress
+        - delivered
+        - rejected
+        - accepted_final
+        - settled
+        - cancelled
+        - disputed
+    Deliverable:
+      type: object
+      properties:
+        id:
+          type: string
+        orderId:
+          type: string
+        version:
+          type: integer
+        artifactUrl:
+          type: string
+        summary:
+          type: string
+    CreateOrderInput:
+      type: object
+      required:
+        - templateId
+        - packageId
+        - inputs
+      properties:
+        templateId:
+          type: string
+        packageId:
+          type: string
+        buyerId:
+          type: string
+        inputs:
+          type: object
+        currency:
+          type: string
+        escrowAmount:
+          type: number
+    ZeaburSkill:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        version:
+          type: string
