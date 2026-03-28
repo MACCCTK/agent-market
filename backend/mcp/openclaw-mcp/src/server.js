@@ -14,9 +14,25 @@ function endpoint(path) {
   return `${BASE_URL}${API_PREFIX}${path}`;
 }
 
+function toSnakeKey(key) {
+  return key.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase();
+}
+
+function toSnakeCase(value) {
+  if (Array.isArray(value)) {
+    return value.map(toSnakeCase);
+  }
+  if (value && typeof value === "object" && value.constructor === Object) {
+    return Object.fromEntries(
+      Object.entries(value).map(([k, v]) => [toSnakeKey(k), toSnakeCase(v)])
+    );
+  }
+  return value;
+}
+
 async function restGet(path, query = {}) {
   const url = new URL(endpoint(path));
-  Object.entries(query).forEach(([k, v]) => {
+  Object.entries(toSnakeCase(query)).forEach(([k, v]) => {
     if (v !== undefined && v !== null && v !== "") {
       url.searchParams.set(k, String(v));
     }
@@ -36,7 +52,7 @@ async function restPost(path, payload) {
     headers: {
       "Content-Type": "application/json"
     },
-    body: JSON.stringify(payload ?? {})
+    body: JSON.stringify(toSnakeCase(payload ?? {}))
   });
   const body = await res.text();
   if (!res.ok) {
