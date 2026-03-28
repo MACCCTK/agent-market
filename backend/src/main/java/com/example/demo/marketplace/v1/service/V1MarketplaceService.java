@@ -7,6 +7,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.PropertyNamingStrategies;
 import com.fasterxml.jackson.databind.annotation.JsonNaming;
 import java.math.BigDecimal;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -17,6 +21,7 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Base64;
@@ -52,6 +57,32 @@ public class V1MarketplaceService {
     }
 
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
+    public record HeartbeatView(
+        long openClawId,
+        String serviceStatus,
+        Long activeOrderId,
+        OrderView assignedOrder,
+        Instant checkedAt
+    ) {
+    }
+
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
+    public record NotificationView(
+        long id,
+        long openClawId,
+        long orderId,
+        String notificationType,
+        String status,
+        String callbackUrl,
+        Map<String, Object> payload,
+        Instant createdAt,
+        Instant sentAt,
+        Instant ackedAt,
+        Instant updatedAt
+    ) {
+    }
+
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record OpenClawProfileView(
         long id,
         String name,
@@ -79,6 +110,7 @@ public class V1MarketplaceService {
     private static final Set<String> ALLOWED_ROLES = Set.of("openclaw", "admin");
     private static final Set<String> OPENCLAW_SUBSCRIPTION_STATUSES = Set.of("subscribed", "unsubscribed");
     private static final Set<String> OPENCLAW_SERVICE_STATUSES = Set.of("available", "busy", "offline", "paused");
+    private static final Set<String> NOTIFICATION_ACKABLE_STATUSES = Set.of("pending", "sent", "failed");
     private static final BigDecimal TOKEN_PRICE_PER_100 = new BigDecimal("1.00");
     private static final Path SQLITE_DB_PATH = Paths.get(System.getProperty("user.dir"), "data", "marketplace.db").toAbsolutePath();
     private static final String SQLITE_URL = "jdbc:sqlite:" + SQLITE_DB_PATH;
@@ -171,6 +203,7 @@ public class V1MarketplaceService {
     private final AtomicLong disputeSeq = new AtomicLong(1);
     private final AtomicLong userSeq = new AtomicLong(1);
     private final AtomicLong openClawSeq = new AtomicLong(2001);
+    private final AtomicLong notificationSeq = new AtomicLong(1);
 
     private final Map<Long, TaskTemplateView> templates = new LinkedHashMap<>();
     private final Map<Long, CapabilityPackageView> capabilityPackages = new LinkedHashMap<>();
@@ -182,8 +215,10 @@ public class V1MarketplaceService {
     private final Map<Long, String> userPasswordHashes = new LinkedHashMap<>();
     private final Map<Long, OpenClawView> openClaws = new LinkedHashMap<>();
     private final Map<Long, OpenClawProfileView> openClawProfiles = new LinkedHashMap<>();
+    private final Map<Long, NotificationView> notifications = new LinkedHashMap<>();
     private final Map<Long, SettlementFeeView> settlementFeesByOrderId = new LinkedHashMap<>();
     private final ObjectMapper objectMapper = new ObjectMapper();
+    private final HttpClient httpClient = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2)).build();
 
     public V1MarketplaceService() {
         ensurePersistenceDirectory();
@@ -596,7 +631,93 @@ public class V1MarketplaceService {
         );
         openClaws.put(executor.id(), runtime);
         persistOpenClawRuntime(runtime);
+        createAssignmentNotification(executor.id(), updated);
         return updated;
+    }
+
+    public List<NotificationView> listNotifications(long openClawId) {
+        requireOpenClaw(openClawId);
+        return notifications.values()
+            .stream()
+            .filter(notification -> notification.openClawId() == openClawId)
+            .sorted(Comparator.comparing(NotificationView::createdAt).reversed().thenComparing(NotificationView::id).reversed())
+            .toList();
+    }
+
+    public NotificationView acknowledgeNotification(long openClawId, long notificationId) {
+        requireOpenClaw(openClawId);
+        NotificationView notification = requireNotification(notificationId);
+        if (notification.openClawId() != openClawId) {
+            throw new ApiException("NOTIFICATION_OWNER_MISMATCH", HttpStatus.CONFLICT, "Notification does not belong to this OpenClaw");
+        }
+        if (!NOTIFICATION_ACKABLE_STATUSES.contains(notification.status())) {
+            return notification;
+        }
+
+        NotificationView updated = new NotificationView(
+            notification.id(),
+            notification.openClawId(),
+            notification.orderId(),
+            notification.notificationType(),
+            "acked",
+            notification.callbackUrl(),
+            notification.payload(),
+            notification.createdAt(),
+            notification.sentAt(),
+            Instant.now(),
+            Instant.now()
+        );
+        notifications.put(updated.id(), updated);
+        persistNotification(updated);
+        persistResultEvent(updated.orderId(), openClawId, "task_assignment_notification_acked", Map.of("notification_id", updated.id()));
+        return updated;
+    }
+
+    public HeartbeatView heartbeatOpenClaw(long openClawId, String serviceStatus) {
+        OpenClawView current = requireOpenClaw(openClawId);
+        String normalizedServiceStatus = normalizeOpenClawServiceStatus(serviceStatus);
+        OrderView assignedOrder = null;
+        Long activeOrderId = current.activeOrderId();
+
+        if ("available".equals(normalizedServiceStatus) && current.activeOrderId() == null && "subscribed".equals(current.subscriptionStatus())) {
+            OrderView pendingOrder = findPendingOrderForHeartbeat(openClawId);
+            if (pendingOrder != null) {
+                assignedOrder = assignOrder(pendingOrder.id(), openClawId);
+                activeOrderId = assignedOrder.id();
+                normalizedServiceStatus = "busy";
+            }
+        }
+
+        OpenClawView updatedRuntime = new OpenClawView(
+            current.id(),
+            current.name(),
+            current.subscriptionStatus(),
+            normalizedServiceStatus,
+            activeOrderId,
+            Instant.now()
+        );
+        openClaws.put(openClawId, updatedRuntime);
+        persistOpenClawRuntime(updatedRuntime);
+
+        return new HeartbeatView(openClawId, updatedRuntime.serviceStatus(), updatedRuntime.activeOrderId(), assignedOrder, Instant.now());
+    }
+
+    public OrderView completeOrderByOpenClaw(
+        long orderId,
+        long openClawId,
+        String deliveryNote,
+        Map<String, Object> deliverablePayload,
+        Map<String, Object> resultSummary
+    ) {
+        if (deliveryNote == null || deliveryNote.isBlank()) {
+            throw new ApiException("DELIVERY_NOTE_REQUIRED", HttpStatus.BAD_REQUEST, "deliveryNote is required");
+        }
+        if (resultSummary == null || resultSummary.isEmpty()) {
+            throw new ApiException("RESULT_SUMMARY_REQUIRED", HttpStatus.BAD_REQUEST, "resultSummary is required");
+        }
+
+        submitDeliverable(orderId, deliveryNote, deliverablePayload, openClawId);
+        return notifyResultReady(orderId, openClawId, resultSummary);
     }
 
     public DeliverableView submitDeliverable(long orderId, String deliveryNote, Map<String, Object> payload, long submittedBy) {
@@ -855,6 +976,113 @@ public class V1MarketplaceService {
         return openClaw;
     }
 
+    private NotificationView requireNotification(long notificationId) {
+        NotificationView notification = notifications.get(notificationId);
+        if (notification == null) {
+            throw new ApiException("NOTIFICATION_NOT_FOUND", HttpStatus.NOT_FOUND, "Notification not found");
+        }
+        return notification;
+    }
+
+    private OrderView findPendingOrderForHeartbeat(long executorOpenClawId) {
+        return orders.values()
+            .stream()
+            .filter(order -> "created".equals(order.status()) || "submitted".equals(order.status()))
+            .filter(order -> order.requesterOpenClawId() != executorOpenClawId)
+            .filter(order -> order.executorOpenClawId() == null || order.executorOpenClawId() == executorOpenClawId)
+            .sorted(Comparator.comparing(OrderView::createdAt).thenComparingLong(OrderView::id))
+            .findFirst()
+            .orElse(null);
+    }
+
+    private NotificationView createAssignmentNotification(long openClawId, OrderView order) {
+        OpenClawProfileView profile = openClawProfiles.get(openClawId);
+        String callbackUrl = extractCallbackUrl(profile == null ? Map.of() : profile.serviceConfig());
+        Map<String, Object> payload = Map.of(
+            "notification_type", "task_assigned",
+            "order_id", order.id(),
+            "order_no", order.orderNo(),
+            "executor_openclaw_id", openClawId,
+            "requester_openclaw_id", order.requesterOpenClawId(),
+            "title", order.title()
+        );
+
+        Instant now = Instant.now();
+        NotificationView notification = new NotificationView(
+            notificationSeq.getAndIncrement(),
+            openClawId,
+            order.id(),
+            "task_assigned",
+            "pending",
+            callbackUrl,
+            payload,
+            now,
+            null,
+            null,
+            now
+        );
+        notifications.put(notification.id(), notification);
+        persistNotification(notification);
+
+        NotificationView dispatched = dispatchNotification(notification);
+        persistResultEvent(order.id(), openClawId, "task_assignment_notification_" + dispatched.status(), Map.of("notification_id", dispatched.id()));
+        return dispatched;
+    }
+
+    private NotificationView dispatchNotification(NotificationView notification) {
+        if (notification.callbackUrl() == null || notification.callbackUrl().isBlank()) {
+            return notification;
+        }
+
+        try {
+            HttpRequest request = HttpRequest.newBuilder(URI.create(notification.callbackUrl()))
+                .timeout(Duration.ofSeconds(2))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(toJson(notification.payload())))
+                .build();
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            String status = response.statusCode() >= 200 && response.statusCode() < 300 ? "sent" : "failed";
+            NotificationView updated = new NotificationView(
+                notification.id(),
+                notification.openClawId(),
+                notification.orderId(),
+                notification.notificationType(),
+                status,
+                notification.callbackUrl(),
+                notification.payload(),
+                notification.createdAt(),
+                Instant.now(),
+                notification.ackedAt(),
+                Instant.now()
+            );
+            notifications.put(updated.id(), updated);
+            persistNotification(updated);
+            return updated;
+        } catch (Exception ex) {
+            NotificationView failed = new NotificationView(
+                notification.id(),
+                notification.openClawId(),
+                notification.orderId(),
+                notification.notificationType(),
+                "failed",
+                notification.callbackUrl(),
+                notification.payload(),
+                notification.createdAt(),
+                null,
+                notification.ackedAt(),
+                Instant.now()
+            );
+            notifications.put(failed.id(), failed);
+            persistNotification(failed);
+            return failed;
+        }
+    }
+
+    private String extractCallbackUrl(Map<String, Object> serviceConfig) {
+        Object raw = serviceConfig == null ? null : serviceConfig.get("callback_url");
+        return raw instanceof String value ? value.trim() : null;
+    }
+
     private OpenClawView findAvailableExecutor(long requesterOpenClawId) {
         return openClaws.values()
             .stream()
@@ -947,6 +1175,22 @@ public class V1MarketplaceService {
               event_type TEXT NOT NULL,
               event_payload TEXT NOT NULL,
               created_at TEXT NOT NULL
+            )
+            """);
+
+        executeSql("""
+            CREATE TABLE IF NOT EXISTS openclaw_notifications (
+              id INTEGER PRIMARY KEY,
+              openclaw_id INTEGER NOT NULL,
+              order_id INTEGER NOT NULL,
+              notification_type TEXT NOT NULL,
+              status TEXT NOT NULL,
+              callback_url TEXT,
+              payload TEXT NOT NULL,
+              created_at TEXT NOT NULL,
+              sent_at TEXT,
+              acked_at TEXT,
+              updated_at TEXT NOT NULL
             )
             """);
     }
@@ -1070,6 +1314,38 @@ public class V1MarketplaceService {
                 ps.setString(3, eventType);
                 ps.setString(4, toJson(payload == null ? Map.of() : payload));
                 ps.setString(5, Instant.now().toString());
+            }
+        );
+    }
+
+    private void persistNotification(NotificationView notification) {
+        executeUpdate(
+            """
+            INSERT INTO openclaw_notifications (
+              id, openclaw_id, order_id, notification_type, status, callback_url,
+              payload, created_at, sent_at, acked_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+              status = excluded.status,
+              callback_url = excluded.callback_url,
+              payload = excluded.payload,
+              sent_at = excluded.sent_at,
+              acked_at = excluded.acked_at,
+              updated_at = excluded.updated_at
+            """,
+            ps -> {
+                ps.setLong(1, notification.id());
+                ps.setLong(2, notification.openClawId());
+                ps.setLong(3, notification.orderId());
+                ps.setString(4, notification.notificationType());
+                ps.setString(5, notification.status());
+                ps.setString(6, notification.callbackUrl());
+                ps.setString(7, toJson(notification.payload()));
+                ps.setString(8, notification.createdAt().toString());
+                ps.setString(9, nullableInstant(notification.sentAt()));
+                ps.setString(10, nullableInstant(notification.ackedAt()));
+                ps.setString(11, notification.updatedAt().toString());
             }
         );
     }
