@@ -1,6 +1,8 @@
 package com.example.demo.marketplace.v1.api;
 
 import com.example.demo.marketplace.v1.service.V1MarketplaceService;
+import com.fasterxml.jackson.annotation.JsonAlias;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.PropertyNamingStrategies;
 import com.fasterxml.jackson.databind.annotation.JsonNaming;
 import io.swagger.v3.oas.annotations.Operation;
@@ -210,6 +212,16 @@ public class V1MarketplaceController {
         );
     }
 
+    @GetMapping("/orders")
+    @Operation(summary = "List orders", description = "Lists marketplace orders with pagination")
+    public List<V1MarketplaceService.OrderView> listOrders(
+        @RequestParam(defaultValue = "0") @Min(0) int page,
+        @RequestParam(defaultValue = "20") @Min(1) int size,
+        @RequestParam(defaultValue = "id,asc") String sort
+    ) {
+        return service.listOrders(page, size, sort);
+    }
+
     @PostMapping("/orders/{id}/accept")
     @Operation(summary = "Accept order", description = "Executor OpenClaw accepts an order")
     public V1MarketplaceService.OrderView acceptOrder(@PathVariable long id) {
@@ -253,7 +265,7 @@ public class V1MarketplaceController {
 
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record CreateCapabilityPackageRequest(
-        @Schema(description = "Owner OpenClaw id") @NotNull Long ownerOpenClawId,
+        @JsonProperty("owner_openclaw_id") @JsonAlias("owner_open_claw_id") @Schema(description = "Owner OpenClaw id") @NotNull Long ownerOpenClawId,
         @Schema(description = "Package title") @NotBlank String title,
         @Schema(description = "Package summary") @NotBlank String summary,
         @Schema(description = "Task template id") @NotNull Long taskTemplateId,
@@ -267,7 +279,7 @@ public class V1MarketplaceController {
 
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record CreateOrderRequest(
-        @Schema(description = "Requester OpenClaw id") @NotNull Long requesterOpenClawId,
+        @JsonProperty("requester_openclaw_id") @JsonAlias("requester_open_claw_id") @Schema(description = "Requester OpenClaw id") @NotNull Long requesterOpenClawId,
         @Schema(description = "Task template id") @NotNull Long taskTemplateId,
         @Schema(description = "Optional capability package id") Long capabilityPackageId,
         @Schema(description = "Order title") @NotBlank String title,
@@ -277,7 +289,7 @@ public class V1MarketplaceController {
 
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record AssignOrderRequest(
-        @Schema(description = "Optional executor OpenClaw id. If omitted, the service auto-picks an available executor") Long executorOpenClawId
+        @JsonProperty("executor_openclaw_id") @JsonAlias("executor_open_claw_id") @Schema(description = "Optional executor OpenClaw id. If omitted, the service auto-picks an available executor") Long executorOpenClawId
     ) {
     }
 
@@ -285,13 +297,13 @@ public class V1MarketplaceController {
     public record SubmitDeliverableRequest(
         @Schema(description = "Delivery note") @NotBlank String deliveryNote,
         @Schema(description = "Deliverable payload") @NotNull Map<String, Object> deliverablePayload,
-        @Schema(description = "Executor OpenClaw id") @NotNull Long submittedByOpenClawId
+        @JsonProperty("submitted_by_openclaw_id") @JsonAlias("submitted_by_open_claw_id") @Schema(description = "Executor OpenClaw id") @NotNull Long submittedByOpenClawId
     ) {
     }
 
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record ApproveAcceptanceRequest(
-        @Schema(description = "Requester OpenClaw id") @NotNull Long requesterOpenClawId,
+        @JsonProperty("requester_openclaw_id") @JsonAlias("requester_open_claw_id") @Schema(description = "Requester OpenClaw id") @NotNull Long requesterOpenClawId,
         @Schema(description = "Checklist result") @NotNull Map<String, Object> checklistResult,
         @Schema(description = "Optional review comment") String comment
     ) {
@@ -312,7 +324,7 @@ public class V1MarketplaceController {
 
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record CreateDisputeRequest(
-        @Schema(description = "Dispute opener OpenClaw id") @NotNull Long openedByOpenClawId,
+        @JsonProperty("opened_by_openclaw_id") @JsonAlias("opened_by_open_claw_id") @Schema(description = "Dispute opener OpenClaw id") @NotNull Long openedByOpenClawId,
         @Schema(description = "Reason code", example = "quality_not_met") @NotBlank String reasonCode,
         @Schema(description = "Dispute description") @NotBlank String description
     ) {

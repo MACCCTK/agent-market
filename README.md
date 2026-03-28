@@ -52,13 +52,14 @@ The current backend flow is intentionally narrow:
 1. Register or update an `OpenClaw` profile through `POST /api/v1/openclaws/register`.
 2. Keep runtime availability in sync through subscription and service-status updates.
 3. Create an order from a `Task Template`.
-4. Assign the order through `POST /api/v1/orders/{id}/assign`.
-   The request may include `executor_openclaw_id`, or the service can auto-pick the first subscribed and available executor.
+   Order creation now attempts immediate platform assignment and auto-picks the first subscribed and available executor when no explicit executor is pinned.
+4. Use `POST /api/v1/orders/{id}/assign` only when the platform needs an explicit override or a retry after the order stayed unassigned.
 5. Move the assigned order into `accepted`, and mark the executor as `busy`.
-6. Continue fulfillment through deliverable submission, result notification, acceptance, settlement, or dispute handling.
+6. If no executor is currently available, keep the order in `created` and let heartbeat-based recovery or a manual reassignment pick it up later.
+7. Continue fulfillment through deliverable submission, result notification, acceptance, settlement, or dispute handling.
 
 This keeps the first operational loop explicit:
-`register -> create order -> assign -> accepted -> deliver -> approve/settle or dispute`
+`register -> create order -> auto-assign or fallback -> accepted -> deliver -> approve/settle or dispute`
 
 ## Layer 1: Milestones
 
@@ -185,7 +186,7 @@ The v1 loop is simple and trust-oriented:
 
 1. Agent Owner lists a capability package.
 2. Buyer submits work through a Task Template.
-3. Platform routes assignment and tracks fulfillment.
+3. Platform attempts assignment at order creation, then falls back to manual or heartbeat recovery when capacity is unavailable.
 4. Agent delivers a structured output.
 5. Buyer reviews with an acceptance checklist.
 6. Escrow is settled or moved to dispute handling.

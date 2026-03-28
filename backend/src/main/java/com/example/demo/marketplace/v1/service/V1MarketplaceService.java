@@ -2,10 +2,12 @@ package com.example.demo.marketplace.v1.service;
 
 import com.example.demo.marketplace.v1.error.ApiException;
 import com.example.demo.marketplace.v1.model.V1OrderStatus;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.PropertyNamingStrategies;
 import com.fasterxml.jackson.databind.annotation.JsonNaming;
+import io.swagger.v3.oas.annotations.media.Schema;
 import java.math.BigDecimal;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -58,18 +60,23 @@ public class V1MarketplaceService {
 
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record HeartbeatView(
-        long openClawId,
+        @JsonProperty("openclaw_id") long openClawId,
         String serviceStatus,
         Long activeOrderId,
         OrderView assignedOrder,
         Instant checkedAt
     ) {
+        @Schema(hidden = true)
+        @JsonProperty("open_claw_id")
+        public long openClawIdLegacy() {
+            return openClawId;
+        }
     }
 
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record NotificationView(
         long id,
-        long openClawId,
+        @JsonProperty("openclaw_id") long openClawId,
         long orderId,
         String notificationType,
         String status,
@@ -80,6 +87,11 @@ public class V1MarketplaceService {
         Instant ackedAt,
         Instant updatedAt
     ) {
+        @Schema(hidden = true)
+        @JsonProperty("open_claw_id")
+        public long openClawIdLegacy() {
+            return openClawId;
+        }
     }
 
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
@@ -97,7 +109,7 @@ public class V1MarketplaceService {
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record SettlementFeeView(
         long orderId,
-        long openClawId,
+        @JsonProperty("openclaw_id") long openClawId,
         BigDecimal hireFee,
         long tokenUsed,
         BigDecimal tokenFee,
@@ -105,12 +117,22 @@ public class V1MarketplaceService {
         String currency,
         Instant settledAt
     ) {
+        @Schema(hidden = true)
+        @JsonProperty("open_claw_id")
+        public long openClawIdLegacy() {
+            return openClawId;
+        }
     }
 
     private static final Set<String> ALLOWED_ROLES = Set.of("openclaw", "admin");
     private static final Set<String> OPENCLAW_SUBSCRIPTION_STATUSES = Set.of("subscribed", "unsubscribed");
     private static final Set<String> OPENCLAW_SERVICE_STATUSES = Set.of("available", "busy", "offline", "paused");
     private static final Set<String> NOTIFICATION_ACKABLE_STATUSES = Set.of("pending", "sent", "failed");
+    private static final Set<String> AUTO_ASSIGNMENT_RECOVERABLE_CODES = Set.of(
+        "OPENCLAW_NONE_AVAILABLE",
+        "OPENCLAW_NOT_AVAILABLE",
+        "OPENCLAW_NOT_SUBSCRIBED"
+    );
     private static final BigDecimal TOKEN_PRICE_PER_100 = new BigDecimal("1.00");
     private static final Path SQLITE_DB_PATH = Paths.get(System.getProperty("user.dir"), "data", "marketplace.db").toAbsolutePath();
     private static final String SQLITE_URL = "jdbc:sqlite:" + SQLITE_DB_PATH;
@@ -135,7 +157,7 @@ public class V1MarketplaceService {
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record CapabilityPackageView(
         long id,
-        long ownerOpenClawId,
+        @JsonProperty("owner_openclaw_id") long ownerOpenClawId,
         String title,
         String summary,
         long taskTemplateId,
@@ -147,14 +169,19 @@ public class V1MarketplaceService {
         Instant createdAt,
         Instant updatedAt
     ) {
+        @Schema(hidden = true)
+        @JsonProperty("owner_open_claw_id")
+        public long ownerOpenClawIdLegacy() {
+            return ownerOpenClawId;
+        }
     }
 
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record OrderView(
         long id,
         String orderNo,
-        long requesterOpenClawId,
-        Long executorOpenClawId,
+        @JsonProperty("requester_openclaw_id") long requesterOpenClawId,
+        @JsonProperty("executor_openclaw_id") Long executorOpenClawId,
         long taskTemplateId,
         Long capabilityPackageId,
         String title,
@@ -170,6 +197,17 @@ public class V1MarketplaceService {
         Instant createdAt,
         Instant updatedAt
     ) {
+        @Schema(hidden = true)
+        @JsonProperty("requester_open_claw_id")
+        public long requesterOpenClawIdLegacy() {
+            return requesterOpenClawId;
+        }
+
+        @Schema(hidden = true)
+        @JsonProperty("executor_open_claw_id")
+        public Long executorOpenClawIdLegacy() {
+            return executorOpenClawId;
+        }
     }
 
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
@@ -474,6 +512,10 @@ public class V1MarketplaceService {
         return pageAndSort(active, page, size, sort, Comparator.comparingLong(CapabilityPackageView::id));
     }
 
+    public List<OrderView> listOrders(int page, int size, String sort) {
+        return pageAndSort(new ArrayList<>(orders.values()), page, size, sort, Comparator.comparingLong(OrderView::id));
+    }
+
     public CapabilityPackageView createOwnerCapabilityPackage(
         long ownerOpenClawId,
         String title,
@@ -554,7 +596,7 @@ public class V1MarketplaceService {
         );
         orders.put(id, view);
         persistOrderSnapshot(view);
-        return view;
+        return autoAssignCreatedOrder(view);
     }
 
     public OrderView acceptOrder(long orderId) {
@@ -680,11 +722,26 @@ public class V1MarketplaceService {
         Long activeOrderId = current.activeOrderId();
 
         if ("available".equals(normalizedServiceStatus) && current.activeOrderId() == null && "subscribed".equals(current.subscriptionStatus())) {
-            OrderView pendingOrder = findPendingOrderForHeartbeat(openClawId);
-            if (pendingOrder != null) {
-                assignedOrder = assignOrder(pendingOrder.id(), openClawId);
-                activeOrderId = assignedOrder.id();
-                normalizedServiceStatus = "busy";
+            OpenClawView candidateRuntime = new OpenClawView(
+                current.id(),
+                current.name(),
+                current.subscriptionStatus(),
+                normalizedServiceStatus,
+                activeOrderId,
+                Instant.now()
+            );
+            openClaws.put(openClawId, candidateRuntime);
+            try {
+                OrderView pendingOrder = findPendingOrderForHeartbeat(openClawId);
+                if (pendingOrder != null) {
+                    assignedOrder = assignOrder(pendingOrder.id(), openClawId);
+                    activeOrderId = assignedOrder.id();
+                    normalizedServiceStatus = "busy";
+                }
+                current = candidateRuntime;
+            } catch (RuntimeException ex) {
+                openClaws.put(openClawId, current);
+                throw ex;
             }
         }
 
@@ -982,6 +1039,17 @@ public class V1MarketplaceService {
             throw new ApiException("NOTIFICATION_NOT_FOUND", HttpStatus.NOT_FOUND, "Notification not found");
         }
         return notification;
+    }
+
+    private OrderView autoAssignCreatedOrder(OrderView order) {
+        try {
+            return assignOrder(order.id(), order.executorOpenClawId());
+        } catch (ApiException ex) {
+            if (AUTO_ASSIGNMENT_RECOVERABLE_CODES.contains(ex.getCode())) {
+                return requireOrder(order.id());
+            }
+            throw ex;
+        }
     }
 
     private OrderView findPendingOrderForHeartbeat(long executorOpenClawId) {
