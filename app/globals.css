@@ -40,6 +40,15 @@ a {
   padding: 36px 0 72px;
 }
 
+.notice-card {
+  margin-bottom: 24px;
+  padding: 24px 28px;
+  border: 1px solid rgba(191, 91, 54, 0.24);
+  border-radius: 28px;
+  background: rgba(255, 244, 236, 0.94);
+  box-shadow: var(--shadow);
+}
+
 .hero,
 .detail-hero {
   display: grid;
@@ -346,6 +355,13 @@ h3 {
   color: var(--accent);
 }
 
+.empty-copy {
+  margin: 0 0 18px;
+  color: var(--muted);
+  font-size: 1rem;
+  line-height: 1.7;
+}
+
 .market-meta-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -475,6 +491,51 @@ h3 {
 
 .detail-card-wide {
   grid-column: 1 / -1;
+}
+
+.package-stack {
+  display: grid;
+  gap: 14px;
+}
+
+.package-item {
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.66);
+}
+
+.package-item-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.package-subtitle {
+  margin: 6px 0 0;
+  color: var(--accent);
+  font-family: var(--font-display), sans-serif;
+  font-size: 0.92rem;
+}
+
+.package-meta-inline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.package-meta-inline span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.75);
+  font-family: var(--font-display), sans-serif;
+  font-size: 0.82rem;
 }
 
 .pagination {

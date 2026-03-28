@@ -1,11 +1,6 @@
 import Link from "next/link";
-import {
-  flowSteps,
-  getCategorySummary,
-  getFeaturedMarkets,
-  getMarketStats,
-  marketplaceMeta
-} from "../data/market";
+import { flowSteps, marketplaceMeta } from "../data/market";
+import { getMarketplaceViewModel } from "../lib/marketplace-api";
 
 function ArrowLink() {
   return (
@@ -13,22 +8,28 @@ function ArrowLink() {
       <div>
         <p className="eyebrow">Full market</p>
         <h3>Open the paginated marketplace view</h3>
-        <p>See every agent package on a dedicated market page that can scale with backend results.</p>
+        <p>See every live OpenClaw agent and the packages currently published by that agent.</p>
       </div>
       <span aria-hidden="true" className="market-jump-arrow">
-        ↗
+        -&gt;
       </span>
     </Link>
   );
 }
 
-export default function HomePage() {
-  const stats = getMarketStats();
-  const featuredMarkets = getFeaturedMarkets();
-  const categorySummary = getCategorySummary();
+export default async function HomePage() {
+  const { backendUnavailable, errorMessage, stats, featuredAgents, categorySummary, emptyState } = await getMarketplaceViewModel();
 
   return (
     <main className="shell">
+      {backendUnavailable ? (
+        <section className="notice-card">
+          <p className="eyebrow">Backend unavailable</p>
+          <h2>Frontend wiring is using the real API contract, but the backend is not reachable.</h2>
+          <p className="lede">Current fetch target failed with: {errorMessage || "unknown backend error"}</p>
+        </section>
+      ) : null}
+
       <section className="hero">
         <div className="hero-copy">
           <p className="eyebrow">{marketplaceMeta.eyebrow}</p>
@@ -39,7 +40,7 @@ export default function HomePage() {
               {marketplaceMeta.ctaLabel}
             </Link>
             <a href="#featured" className="button button-secondary">
-              Featured packages
+              Featured agents
             </a>
           </div>
         </div>
@@ -57,31 +58,41 @@ export default function HomePage() {
       </section>
 
       <section className="strip">
-        {categorySummary.map((item) => (
-          <div key={item.label}>
-            <span>{item.label}</span>
-            <p>{item.count} packages</p>
+        {categorySummary.length > 0 ? (
+          categorySummary.map((item) => (
+            <div key={item.label}>
+              <span>{item.label}</span>
+              <p>{item.count} packages</p>
+            </div>
+          ))
+        ) : (
+          <div>
+            <span>Category signal</span>
+            <p>No packages published yet</p>
           </div>
-        ))}
+        )}
       </section>
 
       <section className="section" id="featured">
         <div className="section-head">
-          <p className="eyebrow">Featured inventory</p>
-          <h2>These cards are projected from the market dataset, not hard-coded page slots.</h2>
+          <p className="eyebrow">Featured agents</p>
+          <h2>These cards are projected from OpenClaw agents and their published capability packages.</h2>
         </div>
+        {emptyState ? <p className="empty-copy">{emptyState}</p> : null}
         <div className="market-grid">
-          {featuredMarkets.map((market) => (
-            <article key={market.slug} className="market-card">
+          {featuredAgents.map((agent) => (
+            <article key={agent.slug} className="market-card">
               <div className="market-card-top">
-                <span className="market-category">{market.category}</span>
-                <span className="market-chip">{market.slaHours}h SLA</span>
+                <span className="market-category">{agent.categoryLabel}</span>
+                <span className="market-chip">{agent.serviceStatus}</span>
               </div>
-              <h3>{market.name}</h3>
-              <p className="market-owner">{market.owner}</p>
-              <p>{market.summary}</p>
+              <h3>{agent.name}</h3>
+              <p className="market-owner">
+                {agent.packageCount} package(s) · {agent.availableCapacityLabel}
+              </p>
+              <p>{agent.headline}</p>
               <div className="chip-list">
-                {market.tags.map((tag) => (
+                {agent.tags.map((tag) => (
                   <span key={tag} className="tag-chip">
                     {tag}
                   </span>
@@ -89,10 +100,10 @@ export default function HomePage() {
               </div>
               <div className="market-card-bottom">
                 <div>
-                  <span>From</span>
-                  <strong>${market.priceFrom}</strong>
+                  <span>Starting price</span>
+                  <strong>{agent.startingPriceLabel}</strong>
                 </div>
-                <Link href={`/market/${market.slug}`}>Open package</Link>
+                <Link href={`/market/${agent.slug}`}>Open agent</Link>
               </div>
             </article>
           ))}
@@ -102,7 +113,7 @@ export default function HomePage() {
       <section className="section section-dark">
         <div className="section-head">
           <p className="eyebrow">Dynamic rendering model</p>
-          <h2>The page shape is now driven by arrays, counts, and slices from the market payload.</h2>
+          <h2>The page shape is now driven by live arrays returned from the backend API.</h2>
         </div>
         <div className="step-list">
           {flowSteps.map((step) => (
