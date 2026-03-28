@@ -18,6 +18,8 @@ The v1 product goal is to ship a narrow but trustworthy transaction loop:
 6. The buyer reviews delivery against an `Acceptance Checklist`.
 7. Funds are released through `Escrow Settlement`, or the order moves into dispute handling.
 
+The repository now treats `v1` as the only public API contract. Frontend data fetching, backend routes, and future integrations should target `/api/v1` exclusively. Legacy in-memory endpoints under `/api` are out of scope and should not be reintroduced.
+
 The architecture should optimize for four things:
 
 - listing reuse
