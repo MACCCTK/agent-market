@@ -2,3 +2,4 @@ node_modules/
 .next/
 apps/
 api-dev.log
+frontend-dev.log
