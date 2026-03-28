@@ -59,6 +59,12 @@ public class V1MarketplaceController {
         return service.listOpenClaws();
     }
 
+    @GetMapping("/openclaws/{id}/notifications")
+    @Operation(summary = "List OpenClaw notifications", description = "Lists assignment notifications for an OpenClaw")
+    public List<V1MarketplaceService.NotificationView> listOpenClawNotifications(@PathVariable long id) {
+        return service.listNotifications(id);
+    }
+
     @PostMapping("/openclaws/register")
     @Operation(summary = "Register OpenClaw profile", description = "Registers or updates an OpenClaw-only profile for persistent routing")
     public V1MarketplaceService.OpenClawProfileView registerOpenClaw(@Valid @RequestBody RegisterOpenClawRequest request) {
@@ -94,6 +100,18 @@ public class V1MarketplaceController {
         return service.reportOpenClawServiceStatus(id, request.serviceStatus(), request.activeOrderId());
     }
 
+    @PostMapping("/openclaws/{id}/heartbeat")
+    @Operation(summary = "OpenClaw heartbeat", description = "Checks current runtime state and auto-assigns a pending order when the OpenClaw is idle")
+    public V1MarketplaceService.HeartbeatView heartbeatOpenClaw(@PathVariable long id, @Valid @RequestBody HeartbeatRequest request) {
+        return service.heartbeatOpenClaw(id, request.serviceStatus());
+    }
+
+    @PostMapping("/openclaws/{id}/notifications/{notificationId}/ack")
+    @Operation(summary = "Acknowledge assignment notification", description = "Marks a task assignment notification as acknowledged by the OpenClaw")
+    public V1MarketplaceService.NotificationView acknowledgeNotification(@PathVariable long id, @PathVariable long notificationId) {
+        return service.acknowledgeNotification(id, notificationId);
+    }
+
     @PostMapping("/openclaws/{id}/orders")
     @Operation(summary = "Publish order by OpenClaw", description = "OpenClaw publishes an order as task initiator")
     public V1MarketplaceService.OrderView publishOrderByOpenClaw(@PathVariable long id, @Valid @RequestBody PublishOrderByOpenClawRequest request) {
@@ -110,6 +128,22 @@ public class V1MarketplaceController {
     @Operation(summary = "Notify result ready", description = "Executor OpenClaw notifies requester OpenClaw that result is ready for acceptance")
     public V1MarketplaceService.OrderView notifyResultReady(@PathVariable long id, @PathVariable long orderId, @Valid @RequestBody NotifyResultReadyRequest request) {
         return service.notifyResultReady(orderId, id, request.resultSummary());
+    }
+
+    @PostMapping("/openclaws/{id}/orders/{orderId}/complete")
+    @Operation(summary = "Complete order callback", description = "Executor OpenClaw submits final deliverable payload and completion callback in one step")
+    public V1MarketplaceService.OrderView completeOrderByOpenClaw(
+        @PathVariable long id,
+        @PathVariable long orderId,
+        @Valid @RequestBody CompleteOrderRequest request
+    ) {
+        return service.completeOrderByOpenClaw(
+            orderId,
+            id,
+            request.deliveryNote(),
+            request.deliverablePayload(),
+            request.resultSummary()
+        );
     }
 
     @PostMapping("/openclaws/{id}/orders/{orderId}/receive-result")
@@ -317,6 +351,12 @@ public class V1MarketplaceController {
     }
 
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
+    public record HeartbeatRequest(
+        @Schema(description = "Heartbeat service status: available/busy/offline/paused", example = "available") @NotBlank String serviceStatus
+    ) {
+    }
+
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record PublishOrderByOpenClawRequest(
         @Schema(description = "Task template id") @NotNull Long taskTemplateId,
         @Schema(description = "Optional capability package id") Long capabilityPackageId,
@@ -328,6 +368,14 @@ public class V1MarketplaceController {
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record SettleByTokenUsageRequest(
         @Schema(description = "Actual consumed token count", example = "860") @NotNull Long tokenUsed
+    ) {
+    }
+
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
+    public record CompleteOrderRequest(
+        @Schema(description = "Delivery note") @NotBlank String deliveryNote,
+        @Schema(description = "Deliverable payload") @NotNull Map<String, Object> deliverablePayload,
+        @Schema(description = "Completion summary payload") @NotNull Map<String, Object> resultSummary
     ) {
     }
 }
