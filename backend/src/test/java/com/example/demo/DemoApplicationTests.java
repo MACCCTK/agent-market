@@ -70,7 +70,8 @@ class DemoApplicationTests {
 		assertEquals(200, createResult.getResponse().getStatus(), createResult.getResponse().getContentAsString());
 		org.junit.jupiter.api.Assertions.assertTrue(createResult.getResponse().getContentAsString().contains("\"requester_openclaw_id\":4001"));
 		org.junit.jupiter.api.Assertions.assertTrue(createResult.getResponse().getContentAsString().contains("\"task_template_id\":1"));
-		org.junit.jupiter.api.Assertions.assertTrue(createResult.getResponse().getContentAsString().contains("\"status\":\"created\""));
+		org.junit.jupiter.api.Assertions.assertTrue(createResult.getResponse().getContentAsString().contains("\"status\":\"accepted\""));
+		org.junit.jupiter.api.Assertions.assertTrue(createResult.getResponse().getContentAsString().contains("\"executor_openclaw_id\":"));
 
 		mockMvc.perform(get("/api/v1/orders"))
 			.andExpect(status().isOk())
@@ -89,23 +90,17 @@ class DemoApplicationTests {
 			.getContentAsString();
 
 		String orderId = created.replaceAll(".*\"id\":(\\d+).*", "$1");
-
-		mockMvc.perform(post("/api/v1/orders/" + orderId + "/assign")
-				.contentType(MediaType.APPLICATION_JSON)
-				.content("""
-					{"executor_openclaw_id":2002}
-					"""))
-			.andExpect(status().isOk())
-			.andExpect(jsonPath("$.executor_openclaw_id").value(2002));
+		String executorId = created.replaceAll(".*\"executor_openclaw_id\":(\\d+).*", "$1");
 
 		mockMvc.perform(get("/api/v1/orders"))
 			.andExpect(status().isOk())
-			.andExpect(jsonPath("$[?(@.id==" + orderId + ")].executor_openclaw_id").value(org.hamcrest.Matchers.hasItem(2002)))
-			.andExpect(jsonPath("$[?(@.id==" + orderId + ")].executor_open_claw_id").value(org.hamcrest.Matchers.hasItem(2002)));
+			.andExpect(jsonPath("$[?(@.id==" + orderId + ")].status").value(org.hamcrest.Matchers.hasItem("accepted")))
+			.andExpect(jsonPath("$[?(@.id==" + orderId + ")].executor_openclaw_id").value(org.hamcrest.Matchers.hasItem(Integer.parseInt(executorId))))
+			.andExpect(jsonPath("$[?(@.id==" + orderId + ")].executor_open_claw_id").value(org.hamcrest.Matchers.hasItem(Integer.parseInt(executorId))));
 
 		mockMvc.perform(get("/api/v1/openclaws"))
 			.andExpect(status().isOk())
-			.andExpect(jsonPath("$[?(@.id==2002)].active_order_id").value(org.hamcrest.Matchers.hasItem(Integer.parseInt(orderId))));
+			.andExpect(jsonPath("$[?(@.id==" + executorId + ")].active_order_id").value(org.hamcrest.Matchers.hasItem(Integer.parseInt(orderId))));
 	}
 
 	@Test
@@ -125,18 +120,16 @@ class DemoApplicationTests {
 	}
 
 	@Test
-	void assignOrderAutoPicksAvailableExecutor() {
+	void createOrderAutoAssignsAvailableExecutor() {
 		V1MarketplaceService service = new V1MarketplaceService();
 
-		V1MarketplaceService.OrderView order = service.createOrder(
+		V1MarketplaceService.OrderView assigned = service.createOrder(
 			4001,
 			1,
 			null,
 			"Need research",
 			Map.of("brief", "market scan")
 		);
-
-		V1MarketplaceService.OrderView assigned = service.assignOrder(order.id(), null);
 
 		assertNotNull(assigned.executorOpenClawId());
 		org.junit.jupiter.api.Assertions.assertEquals("accepted", assigned.status());
@@ -146,6 +139,8 @@ class DemoApplicationTests {
 	@Test
 	void assignOrderToSpecificExecutor() {
 		V1MarketplaceService service = new V1MarketplaceService();
+		service.heartbeatOpenClaw(2001L, "busy");
+		service.heartbeatOpenClaw(2002L, "busy");
 
 		V1MarketplaceService.OrderView order = service.createOrder(
 			4001,
@@ -154,16 +149,26 @@ class DemoApplicationTests {
 			"Need draft",
 			Map.of("topic", "landing page")
 		);
+		V1MarketplaceService.OpenClawProfileView executor = service.registerOpenClaw(
+			null,
+			"Specific Executor",
+			2,
+			Map.of("mode", "manual"),
+			"subscribed",
+			"available"
+		);
 
-		V1MarketplaceService.OrderView assigned = service.assignOrder(order.id(), 2002L);
+		V1MarketplaceService.OrderView assigned = service.assignOrder(order.id(), executor.id());
 
-		org.junit.jupiter.api.Assertions.assertEquals(2002L, assigned.executorOpenClawId());
+		org.junit.jupiter.api.Assertions.assertEquals(executor.id(), assigned.executorOpenClawId());
 		org.junit.jupiter.api.Assertions.assertEquals("accepted", assigned.status());
 	}
 
 	@Test
 	void assignOrderCreatesTrackableNotification() {
 		V1MarketplaceService service = new V1MarketplaceService();
+		service.heartbeatOpenClaw(2001L, "busy");
+		service.heartbeatOpenClaw(2002L, "busy");
 
 		V1MarketplaceService.OrderView order = service.createOrder(
 			4001,
@@ -172,9 +177,17 @@ class DemoApplicationTests {
 			"Notify executor",
 			Map.of("topic", "send notification")
 		);
-		service.assignOrder(order.id(), 2002L);
+		V1MarketplaceService.OpenClawProfileView executor = service.registerOpenClaw(
+			null,
+			"Notification Executor",
+			2,
+			Map.of("mode", "manual"),
+			"subscribed",
+			"available"
+		);
+		service.assignOrder(order.id(), executor.id());
 
-		java.util.List<V1MarketplaceService.NotificationView> notifications = service.listNotifications(2002L);
+		java.util.List<V1MarketplaceService.NotificationView> notifications = service.listNotifications(executor.id());
 
 		org.junit.jupiter.api.Assertions.assertFalse(notifications.isEmpty());
 		org.junit.jupiter.api.Assertions.assertEquals("task_assigned", notifications.get(0).notificationType());
@@ -184,6 +197,8 @@ class DemoApplicationTests {
 	@Test
 	void assignmentNotificationCanBeAcknowledged() {
 		V1MarketplaceService service = new V1MarketplaceService();
+		service.heartbeatOpenClaw(2001L, "busy");
+		service.heartbeatOpenClaw(2002L, "busy");
 
 		V1MarketplaceService.OrderView order = service.createOrder(
 			4001,
@@ -192,10 +207,18 @@ class DemoApplicationTests {
 			"Ack notification",
 			Map.of("brief", "ack flow")
 		);
-		service.assignOrder(order.id(), 2002L);
-		V1MarketplaceService.NotificationView notification = service.listNotifications(2002L).get(0);
+		V1MarketplaceService.OpenClawProfileView executor = service.registerOpenClaw(
+			null,
+			"Ack Executor",
+			2,
+			Map.of("mode", "manual"),
+			"subscribed",
+			"available"
+		);
+		service.assignOrder(order.id(), executor.id());
+		V1MarketplaceService.NotificationView notification = service.listNotifications(executor.id()).get(0);
 
-		V1MarketplaceService.NotificationView acked = service.acknowledgeNotification(2002L, notification.id());
+		V1MarketplaceService.NotificationView acked = service.acknowledgeNotification(executor.id(), notification.id());
 
 		org.junit.jupiter.api.Assertions.assertEquals("acked", acked.status());
 		org.junit.jupiter.api.Assertions.assertNotNull(acked.ackedAt());
@@ -204,6 +227,8 @@ class DemoApplicationTests {
 	@Test
 	void heartbeatAssignsPendingOrderToIdleOpenClaw() {
 		V1MarketplaceService service = new V1MarketplaceService();
+		service.heartbeatOpenClaw(2001L, "busy");
+		service.heartbeatOpenClaw(2002L, "busy");
 
 		V1MarketplaceService.OrderView order = service.createOrder(
 			4001,
@@ -222,28 +247,45 @@ class DemoApplicationTests {
 	}
 
 	@Test
+	void createOrderKeepsCreatedWhenNoExecutorIsAvailable() {
+		V1MarketplaceService service = new V1MarketplaceService();
+		service.heartbeatOpenClaw(2001L, "busy");
+		service.heartbeatOpenClaw(2002L, "busy");
+
+		V1MarketplaceService.OrderView order = service.createOrder(
+			4001,
+			1,
+			null,
+			"No executor available",
+			Map.of("brief", "wait for capacity")
+		);
+
+		org.junit.jupiter.api.Assertions.assertEquals("created", order.status());
+		org.junit.jupiter.api.Assertions.assertNull(order.executorOpenClawId());
+	}
+
+	@Test
 	void completeOrderCallbackPromotesOrderToResultReady() {
 		V1MarketplaceService service = new V1MarketplaceService();
 
-		V1MarketplaceService.OrderView order = service.createOrder(
+		V1MarketplaceService.OrderView assigned = service.createOrder(
 			4001,
 			1,
 			null,
 			"Callback completion",
 			Map.of("brief", "finish work")
 		);
-		V1MarketplaceService.OrderView assigned = service.assignOrder(order.id(), 2002L);
 
 		V1MarketplaceService.OrderView completed = service.completeOrderByOpenClaw(
 			assigned.id(),
-			2002L,
+			assigned.executorOpenClawId(),
 			"Final delivery",
 			Map.of("artifact", "done"),
 			Map.of("summary", "completed")
 		);
 
 		org.junit.jupiter.api.Assertions.assertEquals("result_ready", completed.status());
-		org.junit.jupiter.api.Assertions.assertEquals(2002L, completed.executorOpenClawId());
+		org.junit.jupiter.api.Assertions.assertEquals(assigned.executorOpenClawId(), completed.executorOpenClawId());
 	}
 
 	@Test

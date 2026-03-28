@@ -128,6 +128,11 @@ public class V1MarketplaceService {
     private static final Set<String> OPENCLAW_SUBSCRIPTION_STATUSES = Set.of("subscribed", "unsubscribed");
     private static final Set<String> OPENCLAW_SERVICE_STATUSES = Set.of("available", "busy", "offline", "paused");
     private static final Set<String> NOTIFICATION_ACKABLE_STATUSES = Set.of("pending", "sent", "failed");
+    private static final Set<String> AUTO_ASSIGNMENT_RECOVERABLE_CODES = Set.of(
+        "OPENCLAW_NONE_AVAILABLE",
+        "OPENCLAW_NOT_AVAILABLE",
+        "OPENCLAW_NOT_SUBSCRIBED"
+    );
     private static final BigDecimal TOKEN_PRICE_PER_100 = new BigDecimal("1.00");
     private static final Path SQLITE_DB_PATH = Paths.get(System.getProperty("user.dir"), "data", "marketplace.db").toAbsolutePath();
     private static final String SQLITE_URL = "jdbc:sqlite:" + SQLITE_DB_PATH;
@@ -591,7 +596,7 @@ public class V1MarketplaceService {
         );
         orders.put(id, view);
         persistOrderSnapshot(view);
-        return view;
+        return autoAssignCreatedOrder(view);
     }
 
     public OrderView acceptOrder(long orderId) {
@@ -717,11 +722,26 @@ public class V1MarketplaceService {
         Long activeOrderId = current.activeOrderId();
 
         if ("available".equals(normalizedServiceStatus) && current.activeOrderId() == null && "subscribed".equals(current.subscriptionStatus())) {
-            OrderView pendingOrder = findPendingOrderForHeartbeat(openClawId);
-            if (pendingOrder != null) {
-                assignedOrder = assignOrder(pendingOrder.id(), openClawId);
-                activeOrderId = assignedOrder.id();
-                normalizedServiceStatus = "busy";
+            OpenClawView candidateRuntime = new OpenClawView(
+                current.id(),
+                current.name(),
+                current.subscriptionStatus(),
+                normalizedServiceStatus,
+                activeOrderId,
+                Instant.now()
+            );
+            openClaws.put(openClawId, candidateRuntime);
+            try {
+                OrderView pendingOrder = findPendingOrderForHeartbeat(openClawId);
+                if (pendingOrder != null) {
+                    assignedOrder = assignOrder(pendingOrder.id(), openClawId);
+                    activeOrderId = assignedOrder.id();
+                    normalizedServiceStatus = "busy";
+                }
+                current = candidateRuntime;
+            } catch (RuntimeException ex) {
+                openClaws.put(openClawId, current);
+                throw ex;
             }
         }
 
@@ -1019,6 +1039,17 @@ public class V1MarketplaceService {
             throw new ApiException("NOTIFICATION_NOT_FOUND", HttpStatus.NOT_FOUND, "Notification not found");
         }
         return notification;
+    }
+
+    private OrderView autoAssignCreatedOrder(OrderView order) {
+        try {
+            return assignOrder(order.id(), order.executorOpenClawId());
+        } catch (ApiException ex) {
+            if (AUTO_ASSIGNMENT_RECOVERABLE_CODES.contains(ex.getCode())) {
+                return requireOrder(order.id());
+            }
+            throw ex;
+        }
     }
 
     private OrderView findPendingOrderForHeartbeat(long executorOpenClawId) {
