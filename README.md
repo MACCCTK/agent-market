@@ -13,12 +13,20 @@ The v1 product goal is to ship a narrow but trustworthy transaction loop:
 1. An `Agent Owner` lists a capability package.
 2. A buyer selects a standardized `Task Template`.
 3. The buyer submits required inputs and places an order.
-4. The owner accepts and fulfills the task.
+4. The platform assigns an executor `OpenClaw`, either explicitly or by auto-picking an available one.
 5. The platform collects a `Structured Deliverable`.
 6. The buyer reviews delivery against an `Acceptance Checklist`.
 7. Funds are released through `Escrow Settlement`, or the order moves into dispute handling.
 
 The repository now treats `v1` as the only public API contract. Frontend data fetching, backend routes, and future integrations should target `/api/v1` exclusively. Legacy in-memory endpoints under `/api` are out of scope and should not be reintroduced.
+
+The `v1` HTTP contract is also intentionally strict about payload shape:
+
+- request and response payloads use `snake_case`
+- `POST /api/v1/openclaws/register` is the canonical OpenClaw registration entrypoint
+- `POST /api/v1/orders/{id}/assign` is the canonical order assignment entrypoint
+
+Swagger and `/api-docs` should describe the same `snake_case` contract that the backend accepts at runtime. New endpoints should follow that rule by default.
 
 The architecture should optimize for four things:
 
@@ -34,7 +42,23 @@ If a proposed feature does not improve at least one of those dimensions, it shou
 - Standardized task templates are favored over free-form job posts because they reduce ambiguity, make pricing repeatable, and lower dispute rates.
 - Structured deliverables are favored over purely conversational output because they can be reviewed asynchronously and accepted against explicit criteria.
 - Escrow-backed settlement is the primary trust anchor for v1 because it protects both buyers and owners before a mature reputation system exists.
+- Platform-routed assignment is favored over a pure manual accept flow because it gives the marketplace a deterministic way to turn idle subscribed capacity into active work.
 - The first release should solve a narrow set of low-dispute tasks well instead of attempting broad category coverage.
+
+## Current Flow Map
+
+The current backend flow is intentionally narrow:
+
+1. Register or update an `OpenClaw` profile through `POST /api/v1/openclaws/register`.
+2. Keep runtime availability in sync through subscription and service-status updates.
+3. Create an order from a `Task Template`.
+4. Assign the order through `POST /api/v1/orders/{id}/assign`.
+   The request may include `executor_openclaw_id`, or the service can auto-pick the first subscribed and available executor.
+5. Move the assigned order into `accepted`, and mark the executor as `busy`.
+6. Continue fulfillment through deliverable submission, result notification, acceptance, settlement, or dispute handling.
+
+This keeps the first operational loop explicit:
+`register -> create order -> assign -> accepted -> deliver -> approve/settle or dispute`
 
 ## Layer 1: Milestones
 
@@ -72,9 +96,9 @@ If a proposed feature does not improve at least one of those dimensions, it shou
 - Design task template browsing and filtering.
 - Design the order flow and requirement submission flow.
 - Define the order state machine:
-  `created -> accepted -> in_progress -> delivered -> accepted -> settled`
+  `created -> assigned/accepted -> in_progress -> delivered -> approved -> settled`
   plus exception states such as `disputed`, `rejected`, or `refunded`.
-- Define whether early matching is automatic, assisted, or platform-routed.
+- Early matching in the current backend is platform-routed through the assignment step.
 
 ### Fulfillment and Delivery
 
