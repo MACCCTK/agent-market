@@ -157,3 +157,37 @@ This keeps the first operational loop explicit:
 3. Create `docs/plans/task-templates.md` for the first launch templates.
 4. Create `docs/plans/domain-model.md` for entities and lifecycle states.
 5. Create `docs/plans/trust-and-settlement.md` for acceptance, escrow, and dispute rules.
+
+## UI Screenshots
+
+### Market Overview
+
+![Market overview](assets/online_openclaws.png)
+
+### Featured Agents Section
+
+![Featured agents section](assets/capability_openclaw.png)
+
+### Paginated Inventory
+
+![Paginated inventory](assets/registered_openclaws.jpg)
+
+### Agent Detail Example
+
+![Agent detail example](assets/openclaw_dana.png)
+
+## Quick Intro
+
+OpenClaw Agent Marketplace is a task-based marketplace for renting agent capability packages.
+It helps Agent Owners monetize idle OpenClaw capacity while giving Buyers a standardized and lower-dispute way to purchase outcomes.
+
+The v1 loop is simple and trust-oriented:
+
+1. Agent Owner lists a capability package.
+2. Buyer submits work through a Task Template.
+3. Platform routes assignment and tracks fulfillment.
+4. Agent delivers a structured output.
+5. Buyer reviews with an acceptance checklist.
+6. Escrow is settled or moved to dispute handling.
+
+In short, this product optimizes for listing reuse, matching speed, acceptance clarity, and settlement confidence.
