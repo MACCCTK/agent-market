@@ -1,5 +1,6 @@
 import Link from "next/link";
-import { agentMarkets, paginateMarkets } from "../../data/market";
+import { paginateAgents } from "../../data/market";
+import { getMarketplaceViewModel } from "../../lib/marketplace-api";
 
 const PAGE_SIZE = 6;
 
@@ -7,60 +8,72 @@ function buildPageHref(page) {
   return `/market?page=${page}`;
 }
 
-export default function MarketPage({ searchParams }) {
+export default async function MarketPage({ searchParams }) {
   const page = Number.parseInt(searchParams?.page ?? "1", 10);
-  const { currentPage, totalPages, items } = paginateMarkets(page, PAGE_SIZE, agentMarkets);
+  const { backendUnavailable, errorMessage, agents, emptyState } = await getMarketplaceViewModel();
+  const { currentPage, totalPages, items } = paginateAgents(page, PAGE_SIZE, agents);
   const pages = Array.from({ length: totalPages }, (_, index) => index + 1);
 
   return (
     <main className="shell market-shell">
+      {backendUnavailable ? (
+        <section className="notice-card">
+          <p className="eyebrow">Backend unavailable</p>
+          <h2>Market page could not load live agents from /api/v1.</h2>
+          <p className="lede">{errorMessage || "Unknown backend error"}</p>
+        </section>
+      ) : null}
+
       <section className="market-header">
         <div>
           <p className="eyebrow">All agent market packages</p>
-          <h1>Paginated inventory for every live agent package.</h1>
+          <h1>Paginated inventory for every registered OpenClaw agent.</h1>
           <p className="lede">
-            This page is designed to accept a larger backend result set and render it without assuming a fixed number of
-            cards on the homepage.
+            This page renders OpenClaw agents from the backend and groups the published capability packages under each
+            agent card.
           </p>
         </div>
         <Link href="/" className="button button-secondary market-header-link">
-          ← Back home
+          &lt;- Back home
         </Link>
       </section>
 
+      {emptyState ? <p className="empty-copy">{emptyState}</p> : null}
       <div className="market-grid">
-        {items.map((market) => (
-          <article key={market.slug} className="market-card">
+        {items.map((agent) => (
+          <article key={agent.slug} className="market-card">
             <div className="market-card-top">
-              <span className="market-category">{market.category}</span>
-              <span className="market-chip">{market.availableSlots} slots</span>
+              <span className="market-category">{agent.categoryLabel}</span>
+              <span className="market-chip">{agent.serviceStatus}</span>
             </div>
-            <h3>{market.name}</h3>
-            <p className="market-owner">{market.owner}</p>
-            <p>{market.headline}</p>
+            <h3>{agent.name}</h3>
+            <p className="market-owner">
+              {agent.packageCount} package(s) · {agent.subscriptionStatus}
+            </p>
+            <p>{agent.headline}</p>
             <div className="market-meta-grid">
               <div>
-                <span>From</span>
-                <strong>${market.priceFrom}</strong>
+                <span>Starting price</span>
+                <strong>{agent.startingPriceLabel}</strong>
               </div>
               <div>
                 <span>Trust</span>
-                <strong>{market.trustScore}%</strong>
+                <strong>{agent.trustScore}%</strong>
               </div>
             </div>
             <div className="chip-list">
-              {market.regions.map((region) => (
-                <span key={region} className="tag-chip">
-                  {region}
+              {agent.tags.map((tag) => (
+                <span key={tag} className="tag-chip">
+                  {tag}
                 </span>
               ))}
             </div>
             <div className="market-card-bottom">
               <div>
-                <span>SLA</span>
-                <strong>{market.slaHours}h</strong>
+                <span>Capacity</span>
+                <strong>{agent.availableCapacityLabel}</strong>
               </div>
-              <Link href={`/market/${market.slug}`}>Open package</Link>
+              <Link href={`/market/${agent.slug}`}>Open agent</Link>
             </div>
           </article>
         ))}

@@ -6,6 +6,9 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.sql.Connection;
@@ -70,7 +73,8 @@ public class V1MarketplaceService {
     private static final Set<String> OPENCLAW_SUBSCRIPTION_STATUSES = Set.of("subscribed", "unsubscribed");
     private static final Set<String> OPENCLAW_SERVICE_STATUSES = Set.of("available", "busy", "offline", "paused");
     private static final BigDecimal TOKEN_PRICE_PER_100 = new BigDecimal("1.00");
-    private static final String SQLITE_URL = "jdbc:sqlite:data/marketplace.db";
+    private static final Path SQLITE_DB_PATH = Paths.get(System.getProperty("user.dir"), "data", "marketplace.db").toAbsolutePath();
+    private static final String SQLITE_URL = "jdbc:sqlite:" + SQLITE_DB_PATH;
 
     public record TaskTemplateView(
         long id,
@@ -170,6 +174,7 @@ public class V1MarketplaceService {
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     public V1MarketplaceService() {
+        ensurePersistenceDirectory();
         ensurePersistenceTables();
         seedTemplates();
         seedOpenClaws();
@@ -990,7 +995,11 @@ public class V1MarketplaceService {
         try (Connection connection = DriverManager.getConnection(SQLITE_URL); PreparedStatement statement = connection.prepareStatement(sql)) {
             statement.executeUpdate();
         } catch (SQLException ex) {
-            throw new ApiException("PERSISTENCE_ERROR", HttpStatus.INTERNAL_SERVER_ERROR, "Failed to initialize persistence tables");
+            throw new ApiException(
+                "PERSISTENCE_ERROR",
+                HttpStatus.INTERNAL_SERVER_ERROR,
+                "Failed to initialize persistence tables: " + ex.getMessage()
+            );
         }
     }
 
@@ -999,7 +1008,15 @@ public class V1MarketplaceService {
             statementBinder.accept(statement);
             statement.executeUpdate();
         } catch (SQLException ex) {
-            throw new ApiException("PERSISTENCE_ERROR", HttpStatus.INTERNAL_SERVER_ERROR, "Persistence write failed");
+            throw new ApiException("PERSISTENCE_ERROR", HttpStatus.INTERNAL_SERVER_ERROR, "Persistence write failed: " + ex.getMessage());
+        }
+    }
+
+    private void ensurePersistenceDirectory() {
+        try {
+            Files.createDirectories(SQLITE_DB_PATH.getParent());
+        } catch (java.io.IOException ex) {
+            throw new ApiException("PERSISTENCE_ERROR", HttpStatus.INTERNAL_SERVER_ERROR, "Failed to prepare SQLite directory: " + ex.getMessage());
         }
     }
 

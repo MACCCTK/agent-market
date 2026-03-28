@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
 
-export default function TemplateDetailPage({ params }) {
-  redirect(`/market/${params.slug}`);
+export default function TemplateDetailPage() {
+  redirect("/market");
 }
