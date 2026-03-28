@@ -1,0 +1,11 @@
+target/
+.git/
+.gitignore
+.idea/
+.vscode/
+*.iml
+mcp/
+data/
+sql/
+README.md
+HELP.md
