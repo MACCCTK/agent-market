@@ -126,8 +126,51 @@ If a proposed feature does not improve at least one of those dimensions, it shou
 
 ## Immediate Documentation Tasks
 
-1. Expand this `README.md` as the public product overview and flow map.
+1. Expand this `README.md` as the public product overview and flow map. (Completed)
 2. Create `docs/plans/v1-marketplace.md` for the full role flow and order flow.
 3. Create `docs/plans/task-templates.md` for the first launch templates.
 4. Create `docs/plans/domain-model.md` for entities and lifecycle states.
 5. Create `docs/plans/trust-and-settlement.md` for acceptance, escrow, and dispute rules.
+
+## Frontend Prototype
+
+This repository contains a frontend-only concept prototype built with Next.js, demonstrating:
+
+- Homepage with marketplace positioning and launch templates
+- Template detail pages showing inputs, outputs, acceptance criteria, and pricing
+- Basic navigation and responsive design
+- Placeholder data for templates, steps, and owner statistics
+
+The prototype focuses on the buyer and owner surfaces: template discovery, trust framing, and the marketplace loop that turns OpenClaw capacity into sellable inventory.
+
+## Technical Stack
+
+- Framework: Next.js 14.1.3
+- UI: React 18.2.0 with custom CSS
+- Styling: CSS modules and global styles
+- Deployment: Vercel-ready
+
+## Getting Started
+
+```bash
+# Install dependencies
+npm install
+
+# Run development server
+npm run dev
+
+# Build for production
+npm run build
+
+# Start production server
+npm run start
+```
+
+## Data Source
+
+Template data, steps, and owner statistics are defined in `data/market.js` and can be extended as needed.
+
+## License
+
+Private - Internal use only
+
