@@ -24,6 +24,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @SpringBootTest
 class DemoApplicationTests {
 
+	private static final long REQUESTER_ID = 4001L;
+	private static final long EXECUTOR_ONE_ID = 2001L;
+	private static final long EXECUTOR_TWO_ID = 2002L;
+
 	@Autowired
 	private WebApplicationContext webApplicationContext;
 
@@ -59,7 +63,16 @@ class DemoApplicationTests {
 	}
 
 	@Test
+	void newServiceStartsWithoutSeedOpenClaws() {
+		V1MarketplaceService service = new V1MarketplaceService();
+
+		org.junit.jupiter.api.Assertions.assertTrue(service.listOpenClaws().isEmpty());
+	}
+
+	@Test
 	void ordersEndpointSupportsListAndCreate() throws Exception {
+		registerDefaultOpenClawsViaHttp();
+
 		MvcResult createResult = mockMvc.perform(post("/api/v1/orders")
 				.contentType(MediaType.APPLICATION_JSON)
 				.content("""
@@ -80,6 +93,8 @@ class DemoApplicationTests {
 
 	@Test
 	void assignedOrderAppearsInOrdersAndOpenClawRuntime() throws Exception {
+		registerDefaultOpenClawsViaHttp();
+
 		String created = mockMvc.perform(post("/api/v1/orders")
 				.contentType(MediaType.APPLICATION_JSON)
 				.content("""
@@ -122,9 +137,10 @@ class DemoApplicationTests {
 	@Test
 	void createOrderAutoAssignsAvailableExecutor() {
 		V1MarketplaceService service = new V1MarketplaceService();
+		registerDefaultOpenClaws(service);
 
 		V1MarketplaceService.OrderView assigned = service.createOrder(
-			4001,
+			REQUESTER_ID,
 			1,
 			null,
 			"Need research",
@@ -133,17 +149,18 @@ class DemoApplicationTests {
 
 		assertNotNull(assigned.executorOpenClawId());
 		org.junit.jupiter.api.Assertions.assertEquals("accepted", assigned.status());
-		org.junit.jupiter.api.Assertions.assertEquals(2001L, assigned.executorOpenClawId());
+		org.junit.jupiter.api.Assertions.assertEquals(EXECUTOR_ONE_ID, assigned.executorOpenClawId());
 	}
 
 	@Test
 	void assignOrderToSpecificExecutor() {
 		V1MarketplaceService service = new V1MarketplaceService();
-		service.heartbeatOpenClaw(2001L, "busy");
-		service.heartbeatOpenClaw(2002L, "busy");
+		registerDefaultOpenClaws(service);
+		service.heartbeatOpenClaw(EXECUTOR_ONE_ID, "busy");
+		service.heartbeatOpenClaw(EXECUTOR_TWO_ID, "busy");
 
 		V1MarketplaceService.OrderView order = service.createOrder(
-			4001,
+			REQUESTER_ID,
 			2,
 			null,
 			"Need draft",
@@ -167,11 +184,12 @@ class DemoApplicationTests {
 	@Test
 	void assignOrderCreatesTrackableNotification() {
 		V1MarketplaceService service = new V1MarketplaceService();
-		service.heartbeatOpenClaw(2001L, "busy");
-		service.heartbeatOpenClaw(2002L, "busy");
+		registerDefaultOpenClaws(service);
+		service.heartbeatOpenClaw(EXECUTOR_ONE_ID, "busy");
+		service.heartbeatOpenClaw(EXECUTOR_TWO_ID, "busy");
 
 		V1MarketplaceService.OrderView order = service.createOrder(
-			4001,
+			REQUESTER_ID,
 			2,
 			null,
 			"Notify executor",
@@ -197,11 +215,12 @@ class DemoApplicationTests {
 	@Test
 	void assignmentNotificationCanBeAcknowledged() {
 		V1MarketplaceService service = new V1MarketplaceService();
-		service.heartbeatOpenClaw(2001L, "busy");
-		service.heartbeatOpenClaw(2002L, "busy");
+		registerDefaultOpenClaws(service);
+		service.heartbeatOpenClaw(EXECUTOR_ONE_ID, "busy");
+		service.heartbeatOpenClaw(EXECUTOR_TWO_ID, "busy");
 
 		V1MarketplaceService.OrderView order = service.createOrder(
-			4001,
+			REQUESTER_ID,
 			1,
 			null,
 			"Ack notification",
@@ -227,33 +246,35 @@ class DemoApplicationTests {
 	@Test
 	void heartbeatAssignsPendingOrderToIdleOpenClaw() {
 		V1MarketplaceService service = new V1MarketplaceService();
-		service.heartbeatOpenClaw(2001L, "busy");
-		service.heartbeatOpenClaw(2002L, "busy");
+		registerDefaultOpenClaws(service);
+		service.heartbeatOpenClaw(EXECUTOR_ONE_ID, "busy");
+		service.heartbeatOpenClaw(EXECUTOR_TWO_ID, "busy");
 
 		V1MarketplaceService.OrderView order = service.createOrder(
-			4001,
+			REQUESTER_ID,
 			1,
 			null,
 			"Heartbeat assignment",
 			Map.of("brief", "assign on heartbeat")
 		);
 
-		V1MarketplaceService.HeartbeatView heartbeat = service.heartbeatOpenClaw(2002L, "available");
+		V1MarketplaceService.HeartbeatView heartbeat = service.heartbeatOpenClaw(EXECUTOR_TWO_ID, "available");
 
 		org.junit.jupiter.api.Assertions.assertNotNull(heartbeat.assignedOrder());
 		org.junit.jupiter.api.Assertions.assertEquals(order.id(), heartbeat.assignedOrder().id());
-		org.junit.jupiter.api.Assertions.assertEquals(2002L, heartbeat.assignedOrder().executorOpenClawId());
+		org.junit.jupiter.api.Assertions.assertEquals(EXECUTOR_TWO_ID, heartbeat.assignedOrder().executorOpenClawId());
 		org.junit.jupiter.api.Assertions.assertEquals("accepted", heartbeat.assignedOrder().status());
 	}
 
 	@Test
 	void createOrderKeepsCreatedWhenNoExecutorIsAvailable() {
 		V1MarketplaceService service = new V1MarketplaceService();
-		service.heartbeatOpenClaw(2001L, "busy");
-		service.heartbeatOpenClaw(2002L, "busy");
+		registerDefaultOpenClaws(service);
+		service.heartbeatOpenClaw(EXECUTOR_ONE_ID, "busy");
+		service.heartbeatOpenClaw(EXECUTOR_TWO_ID, "busy");
 
 		V1MarketplaceService.OrderView order = service.createOrder(
-			4001,
+			REQUESTER_ID,
 			1,
 			null,
 			"No executor available",
@@ -267,9 +288,10 @@ class DemoApplicationTests {
 	@Test
 	void completeOrderCallbackPromotesOrderToResultReady() {
 		V1MarketplaceService service = new V1MarketplaceService();
+		registerDefaultOpenClaws(service);
 
 		V1MarketplaceService.OrderView assigned = service.createOrder(
-			4001,
+			REQUESTER_ID,
 			1,
 			null,
 			"Callback completion",
@@ -326,6 +348,27 @@ class DemoApplicationTests {
 			.andExpect(content().string(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("\"serviceConfig\""))))
 			.andExpect(content().string(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("\"subscriptionStatus\""))))
 			.andExpect(content().string(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("\"serviceStatus\""))));
+	}
+
+	private void registerDefaultOpenClaws(V1MarketplaceService service) {
+		service.registerOpenClaw(REQUESTER_ID, "Requester", 10, Map.of(), "subscribed", "available");
+		service.registerOpenClaw(EXECUTOR_ONE_ID, "Executor One", 10, Map.of(), "subscribed", "available");
+		service.registerOpenClaw(EXECUTOR_TWO_ID, "Executor Two", 10, Map.of(), "subscribed", "available");
+	}
+
+	private void registerDefaultOpenClawsViaHttp() throws Exception {
+		registerOpenClawViaHttp(REQUESTER_ID, "Requester");
+		registerOpenClawViaHttp(EXECUTOR_ONE_ID, "Executor One");
+		registerOpenClawViaHttp(EXECUTOR_TWO_ID, "Executor Two");
+	}
+
+	private void registerOpenClawViaHttp(long id, String name) throws Exception {
+		mockMvc.perform(post("/api/v1/openclaws/register")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("""
+					{"id":%d,"name":"%s","capacity_per_week":10,"service_config":{},"subscription_status":"subscribed","service_status":"available"}
+					""".formatted(id, name)))
+			.andExpect(status().isOk());
 	}
 
 }

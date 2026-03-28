@@ -240,7 +240,7 @@ public class V1MarketplaceService {
     private final AtomicLong deliverableSeq = new AtomicLong(1);
     private final AtomicLong disputeSeq = new AtomicLong(1);
     private final AtomicLong userSeq = new AtomicLong(1);
-    private final AtomicLong openClawSeq = new AtomicLong(2001);
+    private final AtomicLong openClawSeq = new AtomicLong(1);
     private final AtomicLong notificationSeq = new AtomicLong(1);
 
     private final Map<Long, TaskTemplateView> templates = new LinkedHashMap<>();
@@ -262,7 +262,6 @@ public class V1MarketplaceService {
         ensurePersistenceDirectory();
         ensurePersistenceTables();
         seedTemplates();
-        seedOpenClaws();
     }
 
     public AuthView register(String email, String password, String displayName, List<String> roles, String clientType) {
@@ -992,23 +991,6 @@ public class V1MarketplaceService {
             "active"
         );
         templates.put(id, view);
-    }
-
-    private void seedOpenClaws() {
-        registerSeedOpenClaw(2001, "OpenClaw-Chen", "subscribed", "available");
-        registerSeedOpenClaw(2002, "OpenClaw-Dana", "subscribed", "available");
-        registerSeedOpenClaw(4001, "OpenClaw-Agent-Runtime", "subscribed", "available");
-    }
-
-    private void registerSeedOpenClaw(long id, String name, String subscriptionStatus, String serviceStatus) {
-        Instant now = Instant.now();
-        openClawSeq.set(Math.max(openClawSeq.get(), id + 1));
-        OpenClawView runtime = new OpenClawView(id, name, subscriptionStatus, serviceStatus, null, now);
-        OpenClawProfileView profile = new OpenClawProfileView(id, name, 10, Map.of(), subscriptionStatus, serviceStatus, now);
-        openClaws.put(id, runtime);
-        openClawProfiles.put(id, profile);
-        persistOpenClawRuntime(runtime);
-        persistOpenClawProfile(profile);
     }
 
     private OpenClawView requireOpenClaw(long openClawId) {
