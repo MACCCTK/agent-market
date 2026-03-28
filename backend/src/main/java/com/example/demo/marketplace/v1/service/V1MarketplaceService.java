@@ -4,6 +4,8 @@ import com.example.demo.marketplace.v1.error.ApiException;
 import com.example.demo.marketplace.v1.model.V1OrderStatus;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.PropertyNamingStrategies;
+import com.fasterxml.jackson.databind.annotation.JsonNaming;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -30,12 +32,15 @@ import org.springframework.stereotype.Service;
 @Service
 public class V1MarketplaceService {
 
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record UserView(long id, String email, String displayName, String status, List<String> roles, Instant createdAt, Instant updatedAt) {
     }
 
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record AuthView(String accessToken, String tokenType, UserView user) {
     }
 
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record OpenClawView(
         long id,
         String name,
@@ -46,6 +51,7 @@ public class V1MarketplaceService {
     ) {
     }
 
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record OpenClawProfileView(
         long id,
         String name,
@@ -57,6 +63,7 @@ public class V1MarketplaceService {
     ) {
     }
 
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record SettlementFeeView(
         long orderId,
         long openClawId,
@@ -76,6 +83,7 @@ public class V1MarketplaceService {
     private static final Path SQLITE_DB_PATH = Paths.get(System.getProperty("user.dir"), "data", "marketplace.db").toAbsolutePath();
     private static final String SQLITE_URL = "jdbc:sqlite:" + SQLITE_DB_PATH;
 
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record TaskTemplateView(
         long id,
         String code,
@@ -92,6 +100,7 @@ public class V1MarketplaceService {
     ) {
     }
 
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record CapabilityPackageView(
         long id,
         long ownerOpenClawId,
@@ -108,6 +117,7 @@ public class V1MarketplaceService {
     ) {
     }
 
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record OrderView(
         long id,
         String orderNo,
@@ -130,9 +140,11 @@ public class V1MarketplaceService {
     ) {
     }
 
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record DeliverableView(long id, long orderId, int versionNo, String deliveryNote, Map<String, Object> deliverablePayload, long submittedBy, Instant submittedAt) {
     }
 
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record DisputeView(long id, long orderId, long openedBy, String reasonCode, String description, String status, Instant createdAt) {
     }
 
@@ -541,6 +553,52 @@ public class V1MarketplaceService {
         return updated;
     }
 
+    public OrderView assignOrder(long orderId, Long executorOpenClawId) {
+        OrderView order = requireOrder(orderId);
+        if (!"created".equals(order.status()) && !"submitted".equals(order.status())) {
+            throw new ApiException("ORDER_INVALID_STATUS", HttpStatus.CONFLICT, "Order cannot be assigned in current status");
+        }
+
+        OpenClawView executor = executorOpenClawId == null
+            ? findAvailableExecutor(order.requesterOpenClawId())
+            : requireAssignableExecutor(executorOpenClawId, order.requesterOpenClawId());
+
+        OrderView updated = new OrderView(
+            order.id(),
+            order.orderNo(),
+            order.requesterOpenClawId(),
+            executor.id(),
+            order.taskTemplateId(),
+            order.capabilityPackageId(),
+            order.title(),
+            V1OrderStatus.ACCEPTED.name().toLowerCase(),
+            order.quotedPrice(),
+            order.currency(),
+            order.slaHours(),
+            order.requirementPayload(),
+            Instant.now(),
+            order.deliveredAt(),
+            order.completedAt(),
+            order.cancelledAt(),
+            order.createdAt(),
+            Instant.now()
+        );
+        orders.put(orderId, updated);
+        persistOrderSnapshot(updated);
+
+        OpenClawView runtime = new OpenClawView(
+            executor.id(),
+            executor.name(),
+            executor.subscriptionStatus(),
+            "busy",
+            orderId,
+            Instant.now()
+        );
+        openClaws.put(executor.id(), runtime);
+        persistOpenClawRuntime(runtime);
+        return updated;
+    }
+
     public DeliverableView submitDeliverable(long orderId, String deliveryNote, Map<String, Object> payload, long submittedBy) {
         OrderView order = requireOrder(orderId);
         if (!"accepted".equals(order.status()) && !"in_progress".equals(order.status())) {
@@ -781,6 +839,31 @@ public class V1MarketplaceService {
             throw new ApiException("OPENCLAW_NOT_FOUND", HttpStatus.NOT_FOUND, "OpenClaw not found");
         }
         return openClaw;
+    }
+
+    private OpenClawView requireAssignableExecutor(long openClawId, long requesterOpenClawId) {
+        OpenClawView openClaw = requireOpenClaw(openClawId);
+        if (openClaw.id() == requesterOpenClawId) {
+            throw new ApiException("OPENCLAW_ASSIGNMENT_INVALID", HttpStatus.CONFLICT, "Requester cannot be assigned as executor");
+        }
+        if (!"subscribed".equals(openClaw.subscriptionStatus())) {
+            throw new ApiException("OPENCLAW_NOT_SUBSCRIBED", HttpStatus.CONFLICT, "OpenClaw is not subscribed");
+        }
+        if (!"available".equals(openClaw.serviceStatus())) {
+            throw new ApiException("OPENCLAW_NOT_AVAILABLE", HttpStatus.CONFLICT, "OpenClaw is not available");
+        }
+        return openClaw;
+    }
+
+    private OpenClawView findAvailableExecutor(long requesterOpenClawId) {
+        return openClaws.values()
+            .stream()
+            .filter(openClaw -> openClaw.id() != requesterOpenClawId)
+            .filter(openClaw -> "subscribed".equals(openClaw.subscriptionStatus()))
+            .filter(openClaw -> "available".equals(openClaw.serviceStatus()))
+            .sorted(Comparator.comparingLong(OpenClawView::id))
+            .findFirst()
+            .orElseThrow(() -> new ApiException("OPENCLAW_NONE_AVAILABLE", HttpStatus.CONFLICT, "No available OpenClaw executor"));
     }
 
     private String normalizeOpenClawSubscriptionStatus(String subscriptionStatus) {

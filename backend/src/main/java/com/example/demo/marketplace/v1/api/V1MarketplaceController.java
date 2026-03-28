@@ -1,6 +1,8 @@
 package com.example.demo.marketplace.v1.api;
 
 import com.example.demo.marketplace.v1.service.V1MarketplaceService;
+import com.fasterxml.jackson.databind.PropertyNamingStrategies;
+import com.fasterxml.jackson.databind.annotation.JsonNaming;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -180,6 +182,12 @@ public class V1MarketplaceController {
         return service.acceptOrder(id);
     }
 
+    @PostMapping("/orders/{id}/assign")
+    @Operation(summary = "Assign order", description = "Assigns an order to a target OpenClaw or auto-picks an available executor")
+    public V1MarketplaceService.OrderView assignOrder(@PathVariable long id, @Valid @RequestBody AssignOrderRequest request) {
+        return service.assignOrder(id, request.executorOpenClawId());
+    }
+
     @PostMapping("/orders/{id}/deliverables")
     @Operation(summary = "Submit deliverable", description = "Submits a new deliverable version for order")
     public V1MarketplaceService.DeliverableView submitDeliverable(@PathVariable long id, @Valid @RequestBody SubmitDeliverableRequest request) {
@@ -198,6 +206,7 @@ public class V1MarketplaceController {
         return service.createDispute(id, request.openedByOpenClawId(), request.reasonCode(), request.description());
     }
 
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record RegisterOpenClawRequest(
         @Schema(description = "Optional OpenClaw id") Long id,
         @Schema(description = "OpenClaw display name") @NotBlank String name,
@@ -208,6 +217,7 @@ public class V1MarketplaceController {
     ) {
     }
 
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record CreateCapabilityPackageRequest(
         @Schema(description = "Owner OpenClaw id") @NotNull Long ownerOpenClawId,
         @Schema(description = "Package title") @NotBlank String title,
@@ -221,6 +231,7 @@ public class V1MarketplaceController {
     ) {
     }
 
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record CreateOrderRequest(
         @Schema(description = "Requester OpenClaw id") @NotNull Long requesterOpenClawId,
         @Schema(description = "Task template id") @NotNull Long taskTemplateId,
@@ -230,6 +241,13 @@ public class V1MarketplaceController {
     ) {
     }
 
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
+    public record AssignOrderRequest(
+        @Schema(description = "Optional executor OpenClaw id. If omitted, the service auto-picks an available executor") Long executorOpenClawId
+    ) {
+    }
+
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record SubmitDeliverableRequest(
         @Schema(description = "Delivery note") @NotBlank String deliveryNote,
         @Schema(description = "Deliverable payload") @NotNull Map<String, Object> deliverablePayload,
@@ -237,6 +255,7 @@ public class V1MarketplaceController {
     ) {
     }
 
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record ApproveAcceptanceRequest(
         @Schema(description = "Requester OpenClaw id") @NotNull Long requesterOpenClawId,
         @Schema(description = "Checklist result") @NotNull Map<String, Object> checklistResult,
@@ -244,17 +263,20 @@ public class V1MarketplaceController {
     ) {
     }
 
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record NotifyResultReadyRequest(
         @Schema(description = "Result summary payload") @NotNull Map<String, Object> resultSummary
     ) {
     }
 
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record ReceiveResultRequest(
         @Schema(description = "Checklist result by requester") @NotNull Map<String, Object> checklistResult,
         @Schema(description = "Optional note") String note
     ) {
     }
 
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record CreateDisputeRequest(
         @Schema(description = "Dispute opener OpenClaw id") @NotNull Long openedByOpenClawId,
         @Schema(description = "Reason code", example = "quality_not_met") @NotBlank String reasonCode,
@@ -262,6 +284,7 @@ public class V1MarketplaceController {
     ) {
     }
 
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record RegisterRequest(
         @Schema(description = "Email") @NotBlank String email,
         @Schema(description = "Plain password for demo", example = "secret123") @NotBlank String password,
@@ -271,6 +294,7 @@ public class V1MarketplaceController {
     ) {
     }
 
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record LoginRequest(
         @Schema(description = "Email") @NotBlank String email,
         @Schema(description = "Plain password for demo", example = "secret123") @NotBlank String password,
@@ -279,17 +303,20 @@ public class V1MarketplaceController {
     ) {
     }
 
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record UpdateSubscriptionRequest(
         @Schema(description = "Subscription status: subscribed/unsubscribed", example = "subscribed") @NotBlank String subscriptionStatus
     ) {
     }
 
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record UpdateServiceStatusRequest(
         @Schema(description = "Service status: available/busy/offline/paused", example = "busy") @NotBlank String serviceStatus,
         @Schema(description = "Current active order id") Long activeOrderId
     ) {
     }
 
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record PublishOrderByOpenClawRequest(
         @Schema(description = "Task template id") @NotNull Long taskTemplateId,
         @Schema(description = "Optional capability package id") Long capabilityPackageId,
@@ -298,6 +325,7 @@ public class V1MarketplaceController {
     ) {
     }
 
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record SettleByTokenUsageRequest(
         @Schema(description = "Actual consumed token count", example = "860") @NotNull Long tokenUsed
     ) {
