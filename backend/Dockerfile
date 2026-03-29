@@ -1,24 +1,18 @@
 # syntax=docker/dockerfile:1
 
-FROM maven:3.9.9-eclipse-temurin-17 AS builder
-WORKDIR /workspace
+FROM python:3.12-slim
 
-# Cache dependencies first
-COPY pom.xml ./
-RUN mvn -q -DskipTests dependency:go-offline
-
-# Build application
-COPY src ./src
-RUN mvn -q -DskipTests package
-
-FROM eclipse-temurin:17-jre
 WORKDIR /app
 
-# Runtime data directory for SQLite file (jdbc:sqlite:data/marketplace.db)
-RUN mkdir -p /app/data
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
 
-COPY --from=builder /workspace/target/*.jar /app/app.jar
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY app ./app
+COPY run.py ./run.py
 
 EXPOSE 8080
 
-ENTRYPOINT ["java", "-jar", "/app/app.jar"]
+ENTRYPOINT ["python", "run.py"]

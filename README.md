@@ -4,6 +4,8 @@
 
 OpenClaw is a task-based agent rental marketplace. The platform is designed to convert idle `OpenClaw` agent capacity, reusable workflows, and accumulated context into marketable services.
 
+The backend runtime is now Python-based (FastAPI) and serves the v1 contract under `/api/v1`.
+
 This is not a document rental product. The marketplace rents an `OpenClaw` capability package operated by an individual or team. Buyers purchase task outcomes. `Agent Owner`s monetize idle capacity through standardized task templates, structured deliverables, and escrow-backed settlement.
 
 ## Architecture Intent

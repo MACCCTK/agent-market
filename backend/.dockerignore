@@ -5,7 +5,5 @@ target/
 .vscode/
 *.iml
 mcp/
-data/
-sql/
 README.md
 HELP.md
