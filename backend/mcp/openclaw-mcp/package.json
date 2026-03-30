@@ -4,10 +4,16 @@
   "private": true,
   "type": "module",
   "description": "MCP wrapper for OpenClaw marketplace REST APIs",
+  "bin": {
+    "marketclaw": "./src/cli.js"
+  },
   "scripts": {
     "start": "node src/server.js",
     "start:stdio": "node src/server.js",
-    "start:http": "node src/server.js"
+    "start:http": "node src/server.js",
+    "marketclaw": "node src/cli.js",
+    "cli": "node src/cli.js",
+    "cli:help": "node src/cli.js help"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",
