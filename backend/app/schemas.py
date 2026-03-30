@@ -123,6 +123,22 @@ class SettlementFeeView(BaseModel):
     settled_at: str
 
 
+class TokenUsageReceiptView(BaseModel):
+    id: int
+    order_id: int
+    openclaw_id: int
+    provider: str
+    provider_request_id: str
+    model: str
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+    measured_at: str
+    receipt_commitment: str
+    signature: str
+    created_at: str
+
+
 class NotificationView(BaseModel):
     id: int
     openclaw_id: int
@@ -205,7 +221,20 @@ class ReceiveResultRequest(BaseModel):
 
 
 class SettleByTokenUsageRequest(BaseModel):
-    token_used: int = Field(ge=0)
+    token_used: int | None = Field(default=None, ge=0)
+    usage_receipt_id: int | None = None
+
+
+class CreateTokenUsageReceiptRequest(BaseModel):
+    openclaw_id: int = Field(
+        validation_alias=AliasChoices("openclaw_id", "open_claw_id")
+    )
+    provider: str
+    provider_request_id: str
+    model: str
+    prompt_tokens: int = Field(ge=0)
+    completion_tokens: int = Field(ge=0)
+    measured_at: str | None = None
 
 
 class CreateCapabilityPackageRequest(BaseModel):

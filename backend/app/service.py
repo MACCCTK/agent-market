@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hmac
 import hashlib
 import json
 import re
@@ -32,6 +33,7 @@ from .schemas import (
     OrderView,
     SettlementFeeView,
     TaskTemplateView,
+    TokenUsageReceiptView,
     UserView,
 )
 
@@ -62,7 +64,7 @@ class MarketplaceService:
         "workflow_setup": Decimal("5.00"),
     }
 
-    def __init__(self, db_url: str | None = None):
+    def __init__(self, db_url: str | None = None, usage_receipt_secret: str | None = None):
         self.db_url = (db_url or "").strip()
         if not (self.db_url.startswith("postgresql://") or self.db_url.startswith("postgres://")):
             raise ApiError(
@@ -85,6 +87,8 @@ class MarketplaceService:
         self.openclaw_profiles: dict[int, OpenClawProfileView] = {}
         self.notifications: dict[int, NotificationView] = {}
         self.settlement_fees_by_order_id: dict[int, SettlementFeeView] = {}
+        self.usage_receipts: dict[int, TokenUsageReceiptView] = {}
+        self.usage_receipt_secret = (usage_receipt_secret or "dev-only-receipt-secret").strip()
 
         self.template_seq = 1
         self.package_seq = 1
@@ -94,6 +98,7 @@ class MarketplaceService:
         self.user_seq = 1
         self.openclaw_seq = 1
         self.notification_seq = 1
+        self.usage_receipt_seq = 1
 
         self._ensure_tables()
         self._seed_templates()
@@ -353,10 +358,13 @@ class MarketplaceService:
     def receive_result(self, order_id: int, requester_openclaw_id: int, checklist_result: dict[str, Any], note: str | None) -> OrderView:
         return self.approve_acceptance(order_id, requester_openclaw_id, checklist_result, note)
 
-    def settle_order_by_token_usage(self, order_id: int, openclaw_id: int, token_used: int) -> SettlementFeeView:
-        if token_used < 0:
-            raise ApiError("TOKEN_USED_INVALID", 400, "tokenUsed must be >= 0")
-
+    def settle_order_by_token_usage(
+        self,
+        order_id: int,
+        openclaw_id: int,
+        token_used: int | None,
+        usage_receipt_id: int | None = None,
+    ) -> SettlementFeeView:
         self._require_openclaw(openclaw_id)
         order = self._require_order(order_id)
 
@@ -365,15 +373,39 @@ class MarketplaceService:
         if order.status not in {"delivered", "approved", "in_progress"}:
             raise ApiError("ORDER_INVALID_STATUS", 409, "Order cannot be settled in current status")
 
+        resolved_token_used: int | None = None
+        if usage_receipt_id is not None:
+            receipt = self.usage_receipts.get(usage_receipt_id)
+            if receipt is None:
+                raise ApiError("USAGE_RECEIPT_NOT_FOUND", 404, "Usage receipt not found")
+            if receipt.order_id != order_id:
+                raise ApiError("USAGE_RECEIPT_ORDER_MISMATCH", 409, "Usage receipt does not belong to this order")
+            if receipt.openclaw_id != openclaw_id:
+                raise ApiError("USAGE_RECEIPT_OWNER_MISMATCH", 409, "Usage receipt does not belong to this OpenClaw")
+            expected_sig = self._sign_receipt_commitment(receipt.receipt_commitment)
+            if not hmac.compare_digest(expected_sig, receipt.signature):
+                raise ApiError("USAGE_RECEIPT_INVALID_SIGNATURE", 409, "Usage receipt signature mismatch")
+            resolved_token_used = receipt.total_tokens
+
+        if token_used is not None:
+            if token_used < 0:
+                raise ApiError("TOKEN_USED_INVALID", 400, "tokenUsed must be >= 0")
+            if resolved_token_used is not None and token_used != resolved_token_used:
+                raise ApiError("TOKEN_USED_MISMATCH", 409, "tokenUsed does not match usage receipt")
+            resolved_token_used = token_used
+
+        if resolved_token_used is None:
+            raise ApiError("TOKEN_USAGE_REQUIRED", 400, "Either tokenUsed or usageReceiptId is required")
+
         hire_fee = order.quoted_price
-        token_fee = (Decimal(token_used) / Decimal("100")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        token_fee = (Decimal(resolved_token_used) / Decimal("100")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
         total_fee = hire_fee + token_fee
 
         settlement = SettlementFeeView(
             order_id=order_id,
             openclaw_id=openclaw_id,
             hire_fee=hire_fee,
-            token_used=token_used,
+            token_used=resolved_token_used,
             token_fee=token_fee,
             total_fee=total_fee,
             currency=order.currency,
@@ -394,6 +426,71 @@ class MarketplaceService:
         self.openclaws[openclaw_id] = runtime
         self._persist_openclaw_runtime(runtime)
         return settlement
+
+    def create_token_usage_receipt(
+        self,
+        order_id: int,
+        openclaw_id: int,
+        provider: str,
+        provider_request_id: str,
+        model: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+        measured_at: str | None,
+    ) -> TokenUsageReceiptView:
+        if prompt_tokens < 0 or completion_tokens < 0:
+            raise ApiError("TOKEN_USED_INVALID", 400, "promptTokens and completionTokens must be >= 0")
+
+        order = self._require_order(order_id)
+        if order.executor_openclaw_id != openclaw_id:
+            raise ApiError("ORDER_OWNER_MISMATCH", 409, "Order is not owned by this OpenClaw")
+        if order.status not in {"accepted", "in_progress", "delivered", "result_ready", "approved"}:
+            raise ApiError("ORDER_INVALID_STATUS", 409, "Order cannot attach usage receipt in current status")
+
+        provider_norm = (provider or "").strip()
+        provider_request_norm = (provider_request_id or "").strip()
+        model_norm = (model or "").strip()
+        if not provider_norm:
+            raise ApiError("USAGE_PROVIDER_REQUIRED", 400, "provider is required")
+        if not provider_request_norm:
+            raise ApiError("USAGE_PROVIDER_REQUEST_ID_REQUIRED", 400, "providerRequestId is required")
+        if not model_norm:
+            raise ApiError("USAGE_MODEL_REQUIRED", 400, "model is required")
+
+        total_tokens = prompt_tokens + completion_tokens
+        measured_at_final = measured_at or self._now_iso()
+        commitment = self._build_receipt_commitment(
+            order_id,
+            openclaw_id,
+            provider_norm,
+            provider_request_norm,
+            model_norm,
+            prompt_tokens,
+            completion_tokens,
+            total_tokens,
+            measured_at_final,
+        )
+        signature = self._sign_receipt_commitment(commitment)
+        created_at = self._now_iso()
+        view = TokenUsageReceiptView(
+            id=self.usage_receipt_seq,
+            order_id=order_id,
+            openclaw_id=openclaw_id,
+            provider=provider_norm,
+            provider_request_id=provider_request_norm,
+            model=model_norm,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
+            measured_at=measured_at_final,
+            receipt_commitment=commitment,
+            signature=signature,
+            created_at=created_at,
+        )
+        self.usage_receipts[view.id] = view
+        self.usage_receipt_seq += 1
+        self._persist_usage_receipt(view)
+        return view
 
     def list_templates(self, page: int, size: int, sort: str) -> list[TaskTemplateView]:
         values = sorted(self.templates.values(), key=lambda x: x.id, reverse=sort.lower().endswith(",desc"))
@@ -762,6 +859,39 @@ class MarketplaceService:
             raise ApiError("TASK_TYPE_UNSUPPORTED", 400, f"Unsupported task type: {task_type}")
         return fee
 
+    def _build_receipt_commitment(
+        self,
+        order_id: int,
+        openclaw_id: int,
+        provider: str,
+        provider_request_id: str,
+        model: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+        total_tokens: int,
+        measured_at: str,
+    ) -> str:
+        payload = {
+            "order_id": order_id,
+            "openclaw_id": openclaw_id,
+            "provider": provider,
+            "provider_request_id": provider_request_id,
+            "model": model,
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
+            "measured_at": measured_at,
+        }
+        serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+    def _sign_receipt_commitment(self, commitment: str) -> str:
+        return hmac.new(
+            self.usage_receipt_secret.encode("utf-8"),
+            commitment.encode("utf-8"),
+            digestmod=hashlib.sha256,
+        ).hexdigest()
+
     @staticmethod
     def _page(items: list[Any], page: int, size: int) -> list[Any]:
         start = max(page, 0) * max(size, 1)
@@ -887,6 +1017,23 @@ class MarketplaceService:
                 updated_at TEXT NOT NULL
             )
             """,
+            """
+            CREATE TABLE IF NOT EXISTS openclaw_usage_receipts (
+                id BIGINT PRIMARY KEY,
+                order_id BIGINT NOT NULL,
+                openclaw_id BIGINT NOT NULL,
+                provider TEXT NOT NULL,
+                provider_request_id TEXT NOT NULL,
+                model TEXT NOT NULL,
+                prompt_tokens INTEGER NOT NULL,
+                completion_tokens INTEGER NOT NULL,
+                total_tokens INTEGER NOT NULL,
+                measured_at TEXT NOT NULL,
+                receipt_commitment TEXT NOT NULL,
+                signature TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """,
         ]
         try:
             with self._connect() as conn:
@@ -1005,12 +1152,39 @@ class MarketplaceService:
                 )
                 self.notifications[notification.id] = notification
 
+            for row in conn.execute(
+                """
+                SELECT id, order_id, openclaw_id, provider, provider_request_id, model,
+                       prompt_tokens, completion_tokens, total_tokens, measured_at,
+                       receipt_commitment, signature, created_at
+                FROM openclaw_usage_receipts ORDER BY id
+                """
+            ):
+                receipt = TokenUsageReceiptView(
+                    id=row["id"],
+                    order_id=row["order_id"],
+                    openclaw_id=row["openclaw_id"],
+                    provider=row["provider"],
+                    provider_request_id=row["provider_request_id"],
+                    model=row["model"],
+                    prompt_tokens=row["prompt_tokens"],
+                    completion_tokens=row["completion_tokens"],
+                    total_tokens=row["total_tokens"],
+                    measured_at=row["measured_at"],
+                    receipt_commitment=row["receipt_commitment"],
+                    signature=row["signature"],
+                    created_at=row["created_at"],
+                )
+                self.usage_receipts[receipt.id] = receipt
+
         if self.openclaws:
             self.openclaw_seq = max(self.openclaws.keys()) + 1
         if self.orders:
             self.order_seq = max(self.orders.keys()) + 1
         if self.notifications:
             self.notification_seq = max(self.notifications.keys()) + 1
+        if self.usage_receipts:
+            self.usage_receipt_seq = max(self.usage_receipts.keys()) + 1
 
     def _persist_openclaw_runtime(self, runtime: OpenClawView) -> None:
         self._execute(
@@ -1141,6 +1315,44 @@ class MarketplaceService:
                 notification.sent_at,
                 notification.acked_at,
                 notification.updated_at,
+            ),
+        )
+
+    def _persist_usage_receipt(self, receipt: TokenUsageReceiptView) -> None:
+        self._execute(
+            """
+            INSERT INTO openclaw_usage_receipts (
+                id, order_id, openclaw_id, provider, provider_request_id, model,
+                prompt_tokens, completion_tokens, total_tokens, measured_at,
+                receipt_commitment, signature, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                provider = excluded.provider,
+                provider_request_id = excluded.provider_request_id,
+                model = excluded.model,
+                prompt_tokens = excluded.prompt_tokens,
+                completion_tokens = excluded.completion_tokens,
+                total_tokens = excluded.total_tokens,
+                measured_at = excluded.measured_at,
+                receipt_commitment = excluded.receipt_commitment,
+                signature = excluded.signature,
+                created_at = excluded.created_at
+            """,
+            (
+                receipt.id,
+                receipt.order_id,
+                receipt.openclaw_id,
+                receipt.provider,
+                receipt.provider_request_id,
+                receipt.model,
+                receipt.prompt_tokens,
+                receipt.completion_tokens,
+                receipt.total_tokens,
+                receipt.measured_at,
+                receipt.receipt_commitment,
+                receipt.signature,
+                receipt.created_at,
             ),
         )
 

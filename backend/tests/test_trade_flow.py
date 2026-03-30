@@ -111,6 +111,22 @@ SETTLEMENT_VIEW_KEYS = {
     "settled_at",
 }
 
+TOKEN_USAGE_RECEIPT_VIEW_KEYS = {
+    "id",
+    "order_id",
+    "openclaw_id",
+    "provider",
+    "provider_request_id",
+    "model",
+    "prompt_tokens",
+    "completion_tokens",
+    "total_tokens",
+    "measured_at",
+    "receipt_commitment",
+    "signature",
+    "created_at",
+}
+
 NOTIFICATION_VIEW_KEYS = {
     "id",
     "openclaw_id",
@@ -149,7 +165,7 @@ def client() -> TestClient:
     with psycopg.connect(db_url) as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "TRUNCATE TABLE openclaw_notifications, openclaw_task_events, openclaw_task_orders, openclaw_profiles, openclaws"
+                "TRUNCATE TABLE openclaw_usage_receipts, openclaw_notifications, openclaw_task_events, openclaw_task_orders, openclaw_profiles, openclaws"
             )
         conn.commit()
 
@@ -217,9 +233,24 @@ def test_trade_flow_auto_assign_deliver_approve_settle(client: TestClient) -> No
     approved_order = approve_resp.json()
     assert approved_order["status"] == "approved"
 
+    usage_receipt_resp = client.post(
+        f"/api/v1/orders/{order_id}/usage-receipts",
+        json={
+            "openclaw_id": 2,
+            "provider": "openai",
+            "provider_request_id": "req-auto-assign-001",
+            "model": "gpt-4.1-mini",
+            "prompt_tokens": 500,
+            "completion_tokens": 360,
+        },
+    )
+    assert usage_receipt_resp.status_code == 200
+    receipt = usage_receipt_resp.json()
+    assert receipt["total_tokens"] == 860
+
     settle_resp = client.post(
         f"/api/v1/openclaws/2/orders/{order_id}/settle",
-        json={"token_used": 860},
+        json={"usage_receipt_id": receipt["id"]},
     )
     assert settle_resp.status_code == 200
     settlement = settle_resp.json()
@@ -515,9 +546,24 @@ def test_endpoint_response_fields_alignment_no_legacy(client: TestClient) -> Non
     assert receive_result_resp.status_code == 200
     assert_exact_keys(receive_result_resp.json(), ORDER_VIEW_KEYS)
 
+    usage_receipt_resp = client.post(
+        f"/api/v1/orders/{order_id}/usage-receipts",
+        json={
+            "openclaw_id": 2,
+            "provider": "openai",
+            "provider_request_id": "req-contract-001",
+            "model": "gpt-4.1-mini",
+            "prompt_tokens": 120,
+            "completion_tokens": 100,
+        },
+    )
+    assert usage_receipt_resp.status_code == 200
+    usage_receipt_payload = usage_receipt_resp.json()
+    assert_exact_keys(usage_receipt_payload, TOKEN_USAGE_RECEIPT_VIEW_KEYS)
+
     settle_resp = client.post(
         f"/api/v1/openclaws/2/orders/{order_id}/settle",
-        json={"token_used": 220},
+        json={"usage_receipt_id": usage_receipt_payload["id"]},
     )
     assert settle_resp.status_code == 200
     assert_exact_keys(settle_resp.json(), SETTLEMENT_VIEW_KEYS)

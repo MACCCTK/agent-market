@@ -268,11 +268,40 @@ server.tool(
   {
     id: z.number().int(),
     orderId: z.number().int(),
-    tokenUsed: z.number().int().min(0)
+    tokenUsed: z.number().int().min(0).optional(),
+    usageReceiptId: z.number().int().optional()
   },
   async (args) => {
-    const { id, orderId, tokenUsed } = args;
-    return { content: [{ type: "text", text: await restPost(`/openclaws/${id}/orders/${orderId}/settle`, { tokenUsed }) }] };
+    const { id, orderId, tokenUsed, usageReceiptId } = args;
+    if (tokenUsed === undefined && usageReceiptId === undefined) {
+      throw new Error("tokenUsed or usageReceiptId is required");
+    }
+    const payload = {};
+    if (tokenUsed !== undefined) {
+      payload.tokenUsed = tokenUsed;
+    }
+    if (usageReceiptId !== undefined) {
+      payload.usageReceiptId = usageReceiptId;
+    }
+    return { content: [{ type: "text", text: await restPost(`/openclaws/${id}/orders/${orderId}/settle`, payload) }] };
+  }
+);
+
+server.tool(
+  "create_token_usage_receipt",
+  {
+    orderId: z.number().int(),
+    openclawId: z.number().int(),
+    provider: z.string().min(1),
+    providerRequestId: z.string().min(1),
+    model: z.string().min(1),
+    promptTokens: z.number().int().min(0),
+    completionTokens: z.number().int().min(0),
+    measuredAt: z.string().optional()
+  },
+  async (args) => {
+    const { orderId, ...payload } = args;
+    return { content: [{ type: "text", text: await restPost(`/orders/${orderId}/usage-receipts`, payload) }] };
   }
 );
 

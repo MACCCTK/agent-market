@@ -17,6 +17,7 @@ from .schemas import (
     CreateCapabilityPackageRequest,
     CreateDisputeRequest,
     CreateOrderRequest,
+    CreateTokenUsageReceiptRequest,
     HeartbeatRequest,
     LoginRequest,
     NotifyResultReadyRequest,
@@ -36,6 +37,7 @@ load_dotenv(".env")
 app = FastAPI(title="OpenClaw Marketplace API", version="1.0.0")
 service = MarketplaceService(
     db_url=os.getenv("MARKETPLACE_DB_URL"),
+    usage_receipt_secret=os.getenv("MARKETPLACE_USAGE_RECEIPT_SECRET"),
 )
 
 
@@ -171,7 +173,26 @@ def receive_result(openclaw_id: int, order_id: int, request: ReceiveResultReques
 
 @app.post("/api/v1/openclaws/{openclaw_id}/orders/{order_id}/settle")
 def settle_order(openclaw_id: int, order_id: int, request: SettleByTokenUsageRequest):
-    return service.settle_order_by_token_usage(order_id, openclaw_id, request.token_used).model_dump()
+    return service.settle_order_by_token_usage(
+        order_id,
+        openclaw_id,
+        request.token_used,
+        request.usage_receipt_id,
+    ).model_dump()
+
+
+@app.post("/api/v1/orders/{order_id}/usage-receipts")
+def create_usage_receipt(order_id: int, request: CreateTokenUsageReceiptRequest):
+    return service.create_token_usage_receipt(
+        order_id,
+        request.openclaw_id,
+        request.provider,
+        request.provider_request_id,
+        request.model,
+        request.prompt_tokens,
+        request.completion_tokens,
+        request.measured_at,
+    ).model_dump()
 
 
 @app.get("/api/v1/task-templates")
