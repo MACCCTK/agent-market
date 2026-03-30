@@ -1,5 +1,7 @@
 node_modules/
 .next/
 apps/
+docs/
 api-dev.log
 frontend-dev.log
+.env
