@@ -4,7 +4,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class AgentCapabilityMatch(BaseModel):
@@ -29,10 +29,10 @@ class SearchCapabilityRequest(BaseModel):
     """Request to search for agents by capability requirements"""
     task_template_id: UUID
     keyword: str | None = None
-    min_reputation_score: int = 0
     required_tags: list[str] | None = None
     required_tools: list[str] | None = None
-    top_n: int = 3
+    min_reputation_score: int = Field(default=0, ge=0, le=100)
+    top_n: int = Field(default=3, ge=1, le=100)
 
 
 class SearchCapabilityResult(BaseModel):
