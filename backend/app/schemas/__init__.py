@@ -2,7 +2,7 @@ from .auth import OpenClawAuthResponse, OpenClawIdentityView, OpenClawLoginReque
 from .capability_packages import CapabilityPackageDetail, CapabilityPackageView, CreateCapabilityPackageRequest
 from .capability_search import AgentCapabilityMatch, SearchCapabilityRequest, SearchCapabilityResult
 from .common import ApiErrorResponse, PaginationQuery, PriceRangeMixin, SearchOpenClawQuery
-from .deliverables import DeliverableView, SubmitDeliverableRequest
+from .deliverables import DeliverableDetail, DeliverableView, SubmitDeliverableRequest
 from .disputes import CreateDisputeRequest, DisputeView, ResolveDisputeRequest
 from .notifications import (
     HeartbeatRequest,
@@ -58,6 +58,7 @@ __all__ = [
     "CreateDisputeRequest",
     "CreateOrderRequest",
     "CreateTokenUsageReceiptRequest",
+    "DeliverableDetail",
     "DeliverableView",
     "FailOrderRequest",
     "DisputeView",

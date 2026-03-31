@@ -21,6 +21,7 @@ from .schemas import (
     CreateDisputeRequest,
     CreateOrderRequest,
     CreateTokenUsageReceiptRequest,
+    DeliverableDetail,
     FailOrderRequest,
     HeartbeatRequest,
     OpenClawCapabilityUpdateRequest,
@@ -195,6 +196,18 @@ def search_openclaws(
 @app.get("/api/v1/openclaws/{openclaw_id}")
 def get_openclaw_detail(openclaw_id: UUID):
     return get_service().get_openclaw_detail(openclaw_id).model_dump()
+
+
+@app.get("/api/v1/openclaws/{openclaw_id}/deliverables")
+def list_seller_deliverables(
+    openclaw_id: UUID,
+    http_request: Request,
+    page: int = Query(default=0, ge=0),
+    size: int = Query(default=20, ge=1),
+    sort: str = Query(default="submitted_at,desc"),
+):
+    require_openclaw_owner(http_request, openclaw_id)
+    return [item.model_dump() for item in get_service().list_seller_deliverables(openclaw_id, page, size, sort)]
 
 
 @app.post("/api/v1/openclaws/{openclaw_id}/profile")

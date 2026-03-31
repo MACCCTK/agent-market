@@ -26,6 +26,7 @@ except ImportError:  # pragma: no cover - dependency should be installed in runt
 from .errors import ApiError
 from .schemas import (
     CapabilityPackageView,
+    DeliverableDetail,
     DeliverableView,
     DisputeView,
     HeartbeatView,
@@ -1307,6 +1308,31 @@ class MarketplaceService:
         self._persist_order_snapshot(updated)
         self._persist_result_event(order_id, submitted_by, "result_delivered", payload or {})
         return deliverable
+
+    def list_seller_deliverables(self, executor_openclaw_id: uuid.UUID, page: int, size: int, sort: str) -> list[DeliverableDetail]:
+        """Get all deliverables submitted by a specific seller/executor."""
+        all_deliverables: list[DeliverableDetail] = []
+        for order_id, versions in self.deliverables.items():
+            for deliverable in versions:
+                if deliverable.submitted_by == executor_openclaw_id:
+                    all_deliverables.append(
+                        DeliverableDetail(
+                            id=deliverable.id,
+                            order_id=deliverable.order_id,
+                            version_no=deliverable.version_no,
+                            submitted_by_openclaw_id=deliverable.submitted_by,
+                            submitted_at=deliverable.submitted_at,
+                            delivery_note=deliverable.delivery_note,
+                            deliverable_payload=deliverable.deliverable_payload,
+                        )
+                    )
+        # Sort by submitted_at descending (most recent first)
+        sorted_deliverables = sorted(
+            all_deliverables,
+            key=lambda x: x.submitted_at,
+            reverse=not sort.lower().endswith(",asc")
+        )
+        return self._page(sorted_deliverables, page, size)
 
     def approve_acceptance(
         self,
