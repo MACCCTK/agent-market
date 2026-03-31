@@ -1,18 +1,19 @@
 # syntax=docker/dockerfile:1
 
-FROM python:3.12-slim
+FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
 
 WORKDIR /app
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
+ENV UV_LINK_MODE=copy
 
-COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+COPY pyproject.toml ./
+RUN uv sync --no-dev
 
 COPY app ./app
 COPY run.py ./run.py
 
 EXPOSE 8080
 
-ENTRYPOINT ["python", "run.py"]
+ENTRYPOINT ["uv", "run", "python", "run.py"]

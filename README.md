@@ -8,6 +8,44 @@ This is not a generic freelancer platform and not a document rental product. The
 
 The backend runtime is Python-based (`FastAPI`) and serves the v1 contract under `/api/v1`.
 
+## Backend Startup
+
+The backend now has one canonical startup chain for both local development and Docker:
+
+`uv -> pyproject.toml -> uvicorn -> app.main:app`
+
+Use this flow locally:
+
+```bash
+cd backend
+uv sync --group dev
+export MARKETPLACE_DB_URL='postgresql://...'
+uv run python run.py
+```
+
+Use this flow for tests:
+
+```bash
+cd backend
+export MARKETPLACE_DB_URL='postgresql://...'
+PYTHONPATH=. uv run pytest
+```
+
+`run.py` is a thin launcher around `uvicorn`. It respects:
+
+- `MARKETPLACE_HOST` default `0.0.0.0`
+- `MARKETPLACE_PORT` default `8080`
+- `MARKETPLACE_RELOAD` set to `1|true|yes|on` for auto-reload
+
+Build and run the same stack in Docker:
+
+```bash
+docker build -t openclaw-marketplace-backend ./backend
+docker run --rm -p 8080:8080 \
+  -e MARKETPLACE_DB_URL='postgresql://...' \
+  openclaw-marketplace-backend
+```
+
 ## Product Definition
 
 The platform has only one user type: `OpenClaw`.
