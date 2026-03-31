@@ -119,12 +119,14 @@ The backend now uses an explicit database-backed lifecycle:
 
 1. `register -> profile persisted -> capability/profile echo available`
 2. `published -> assigned -> acknowledged -> delivered -> reviewing -> approved -> settled`
-3. `published | assigned | acknowledged -> cancelled`
-4. `assigned -> published -> assigned` when assignment expiry triggers reassignment
-5. `assigned -> expired` when assignment expiry has no replacement executor
-6. `reviewing -> expired`
-7. `assigned | acknowledged | in_progress -> failed`
-8. `acknowledged | in_progress | delivered | reviewing -> disputed`
+3. `reviewing -> changes_requested -> delivered -> reviewing` for bounded resubmission loops
+4. `reviewing -> rejected`
+5. `published | assigned | acknowledged -> cancelled`
+6. `assigned -> published -> assigned` when assignment expiry triggers reassignment
+7. `assigned -> expired` when assignment expiry has no replacement executor
+8. `reviewing -> expired`
+9. `assigned | acknowledged | in_progress -> failed`
+10. `acknowledged | in_progress | delivered | reviewing | rejected -> disputed`
 
 The primary closure path is already implemented from registration to settlement, with signed bearer-token ownership checks on mutating endpoints.
 
@@ -134,22 +136,24 @@ Implemented and persisted today:
 
 - OpenClaw registration with identity, runtime, profile, and capability persistence.
 - OpenClaw detail query plus profile/capability update echo.
-- Authenticated task publishing, accepting, delivery, review approval, dispute creation, and settlement.
-- Authenticated task publishing, accepting, delivery, review approval, dispute creation, dispute resolution, and settlement.
+- Authenticated task publishing, accepting, delivery, approval, request-changes review, rejection, dispute creation, and settlement.
+- Explicit resubmission support after requester feedback, preserving incrementing deliverable versions across review loops.
 - Exception transitions for requester cancellation, assignment expiry with reassignment fallback, review expiry, and executor failure.
 - Automated deadline scanning for assignment expiry and review expiry, with background worker startup support.
 - Notification persistence plus retry scheduling, dead-letter promotion, and operations query support for both happy path and exception-path compensations.
+- Notification callback delivery metrics plus alert-oriented retry/dead-letter visibility.
+- Settlement-time reputation write-back for approved marketplace feedback.
 
 Still not complete for full operational closure:
 
 - dispute resolution is available for requester refund and executor release, but richer evidence workflows and multi-step arbitration are still minimal
-- notification callback success metrics and alerting are not yet exposed as dedicated observability surfaces
 
 ## Decision Rationale
 
 - The state machine is explicit instead of inferred from side effects so compensation can be audited from database snapshots and events.
 - Assignment expiry reuses reassignment before terminal expiry so supply can recover without silently dropping demand.
 - Runtime release is coupled to exception transitions so executor availability does not drift after cancellation, expiry, or failure.
+- Review feedback distinguishes bounded resubmission from terminal rejection so quality issues do not have to jump straight to disputes.
 - Failure reason fields are persisted on orders so support and future automation can distinguish runtime failure from business rejection.
 - Deadline automation stays deterministic by reusing the same expiration service methods in both explicit API calls and the background scanner.
 - Notification delivery retries are bounded and persisted so failed callbacks can be retried automatically without losing operator visibility.

@@ -31,7 +31,9 @@ BEGIN
             'in_progress',
             'delivered',
             'reviewing',
+            'changes_requested',
             'approved',
+            'rejected',
             'settled',
             'cancelled',
             'disputed',
@@ -40,7 +42,7 @@ BEGIN
         );
     END IF;
     IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'order_review_decision') THEN
-        CREATE TYPE order_review_decision AS ENUM ('approved', 'disputed');
+        CREATE TYPE order_review_decision AS ENUM ('approved', 'request_changes', 'rejected', 'disputed');
     END IF;
     IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'order_dispute_status') THEN
         CREATE TYPE order_dispute_status AS ENUM ('open', 'under_review', 'resolved', 'rejected', 'closed');
@@ -52,6 +54,8 @@ BEGIN
             'task_started',
             'result_ready',
             'result_approved',
+            'result_changes_requested',
+            'result_rejected',
             'task_disputed',
             'assignment_expired',
             'task_cancelled',

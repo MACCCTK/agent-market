@@ -29,6 +29,8 @@ from .schemas import (
     DeliverableView,
     DisputeView,
     HeartbeatView,
+    NotificationAlertSummary,
+    NotificationDeliveryMetrics,
     NotificationRetryProcessSummary,
     NotificationView,
     OpenClawCapabilityView,
@@ -309,6 +311,58 @@ class MarketplaceService:
         if order_id is not None:
             values = [item for item in values if item.order_id == order_id]
         return sorted(values, key=lambda item: (item.updated_at, item.id), reverse=True)
+
+    def get_notification_delivery_metrics(
+        self,
+        openclaw_id: uuid.UUID | None = None,
+        order_id: uuid.UUID | None = None,
+    ) -> NotificationDeliveryMetrics:
+        notifications = self._filter_notifications(openclaw_id=openclaw_id, order_id=order_id)
+        callback_notifications = [item for item in notifications if (item.callback_url or "").strip()]
+        callback_success_total = sum(1 for item in callback_notifications if item.status in {"sent", "acked"})
+        callback_failure_total = sum(1 for item in callback_notifications if item.status in {"retry_scheduled", "dead_letter"})
+        callback_success_rate = (
+            round((callback_success_total / len(callback_notifications)) * 100, 2)
+            if callback_notifications
+            else 0.0
+        )
+        return NotificationDeliveryMetrics(
+            total_notifications=len(notifications),
+            callback_configured_total=len(callback_notifications),
+            callback_success_total=callback_success_total,
+            callback_failure_total=callback_failure_total,
+            callback_success_rate=callback_success_rate,
+            pending_total=sum(1 for item in notifications if item.status == "pending"),
+            sent_total=sum(1 for item in notifications if item.status == "sent"),
+            acked_total=sum(1 for item in notifications if item.status == "acked"),
+            retry_scheduled_total=sum(1 for item in notifications if item.status == "retry_scheduled"),
+            dead_letter_total=sum(1 for item in notifications if item.status == "dead_letter"),
+        )
+
+    def get_notification_alert_summary(
+        self,
+        openclaw_id: uuid.UUID | None = None,
+        order_id: uuid.UUID | None = None,
+    ) -> NotificationAlertSummary:
+        retry_scheduled_notifications = self.list_notification_operations(
+            statuses=["retry_scheduled"],
+            openclaw_id=openclaw_id,
+            order_id=order_id,
+        )
+        dead_letter_notifications = self.list_notification_operations(
+            statuses=["dead_letter"],
+            openclaw_id=openclaw_id,
+            order_id=order_id,
+        )
+        callback_failure_total = len(retry_scheduled_notifications) + len(dead_letter_notifications)
+        return NotificationAlertSummary(
+            has_alerts=callback_failure_total > 0,
+            retry_scheduled_total=len(retry_scheduled_notifications),
+            dead_letter_total=len(dead_letter_notifications),
+            callback_failure_total=callback_failure_total,
+            retry_scheduled_notifications=retry_scheduled_notifications,
+            dead_letter_notifications=dead_letter_notifications,
+        )
 
     def register_openclaw(
         self,
@@ -624,6 +678,7 @@ class MarketplaceService:
         self.orders[order_id] = updated_order
         self._persist_order_snapshot(updated_order)
         self._persist_settlement(order, settlement)
+        self._persist_reputation_feedback(order, resolved_token_used, settlement.settled_at)
         self._create_notification(
             order.requester_openclaw_id,
             updated_order,
@@ -1117,7 +1172,7 @@ class MarketplaceService:
 
     def submit_deliverable(self, order_id: uuid.UUID, delivery_note: str, payload: dict[str, Any], submitted_by: uuid.UUID) -> DeliverableView:
         order = self._require_order(order_id)
-        if order.status not in {"acknowledged", "in_progress"}:
+        if order.status not in {"acknowledged", "in_progress", "changes_requested"}:
             raise ApiError("ORDER_INVALID_STATUS", 409, "Order cannot be delivered in current status")
         if order.executor_openclaw_id != submitted_by:
             raise ApiError("ORDER_EXECUTOR_MISMATCH", 409, "Only assigned executor OpenClaw can submit deliverable")
@@ -1141,6 +1196,9 @@ class MarketplaceService:
                 "status": "delivered",
                 "started_at": order.started_at or now,
                 "delivered_at": now,
+                "review_started_at": None,
+                "review_expires_at": None,
+                "approved_at": None,
                 "updated_at": now,
             }
         )
@@ -1156,38 +1214,82 @@ class MarketplaceService:
         checklist_result: dict[str, Any],
         comment: str | None,
     ) -> OrderView:
+        return self.review_acceptance(order_id, requester_openclaw_id, "approved", checklist_result, comment)
+
+    def review_acceptance(
+        self,
+        order_id: uuid.UUID,
+        requester_openclaw_id: uuid.UUID,
+        decision: str,
+        checklist_result: dict[str, Any],
+        comment: str | None,
+    ) -> OrderView:
         order = self._require_order(order_id)
         if order.status not in {"delivered", "reviewing"}:
-            raise ApiError("ORDER_INVALID_STATUS", 409, "Order cannot be approved in current status")
+            raise ApiError("ORDER_INVALID_STATUS", 409, "Order cannot be reviewed in current status")
         if order.requester_openclaw_id != requester_openclaw_id:
-            raise ApiError("ORDER_REQUESTER_MISMATCH", 409, "Only requester OpenClaw can approve result")
+            raise ApiError("ORDER_REQUESTER_MISMATCH", 409, "Only requester OpenClaw can review result")
         if not checklist_result:
             raise ApiError("CHECKLIST_REQUIRED", 400, "checklistResult is required")
 
+        normalized_decision = self._normalize_review_decision(decision)
         now = self._now_iso()
-        updated = order.model_copy(
-            update={
-                "status": "approved",
-                "review_started_at": order.review_started_at or now,
-                "approved_at": now,
-                "updated_at": now,
-            }
-        )
+        if normalized_decision == "approved":
+            updated = order.model_copy(
+                update={
+                    "status": "approved",
+                    "review_started_at": order.review_started_at or now,
+                    "approved_at": now,
+                    "updated_at": now,
+                }
+            )
+            event_type = "result_approved"
+            notification_type = "result_approved"
+        elif normalized_decision == "request_changes":
+            updated = order.model_copy(
+                update={
+                    "status": "changes_requested",
+                    "review_started_at": order.review_started_at or now,
+                    "review_expires_at": None,
+                    "approved_at": None,
+                    "updated_at": now,
+                }
+            )
+            event_type = "result_changes_requested"
+            notification_type = "result_changes_requested"
+        else:
+            updated = order.model_copy(
+                update={
+                    "status": "rejected",
+                    "review_started_at": order.review_started_at or now,
+                    "review_expires_at": None,
+                    "approved_at": None,
+                    "updated_at": now,
+                }
+            )
+            event_type = "result_rejected"
+            notification_type = "result_rejected"
         self.orders[order_id] = updated
         self._persist_order_snapshot(updated)
-        self._persist_review(order_id, requester_openclaw_id, "approved", checklist_result, comment)
+        self._persist_review(order_id, requester_openclaw_id, normalized_decision, checklist_result, comment)
         self._persist_result_event(
             order_id,
             requester_openclaw_id,
-            "result_received",
-            {"checklist": checklist_result, "note": comment or ""},
+            event_type,
+            {"decision": normalized_decision, "checklist": checklist_result, "note": comment or ""},
         )
         if order.executor_openclaw_id is not None:
+            if normalized_decision in {"request_changes", "rejected"}:
+                self._sync_openclaw_runtime_state(order.executor_openclaw_id)
             self._create_notification(
                 order.executor_openclaw_id,
                 updated,
-                "result_approved",
-                {"requester_openclaw_id": requester_openclaw_id, "comment": comment or ""},
+                notification_type,
+                {
+                    "requester_openclaw_id": requester_openclaw_id,
+                    "decision": normalized_decision,
+                    "comment": comment or "",
+                },
             )
         return updated
 
@@ -1564,6 +1666,34 @@ class MarketplaceService:
         self._persist_notification(updated)
         return updated
 
+    @staticmethod
+    def _normalize_review_decision(value: str) -> str:
+        normalized = (value or "").strip().lower()
+        aliases = {
+            "approve": "approved",
+            "approved": "approved",
+            "request_changes": "request_changes",
+            "changes_requested": "request_changes",
+            "reject": "rejected",
+            "rejected": "rejected",
+        }
+        resolved = aliases.get(normalized)
+        if resolved is None:
+            raise ApiError("ORDER_REVIEW_DECISION_INVALID", 400, "decision must be approved, request_changes, or reject")
+        return resolved
+
+    def _filter_notifications(
+        self,
+        openclaw_id: uuid.UUID | None = None,
+        order_id: uuid.UUID | None = None,
+    ) -> list[NotificationView]:
+        values = list(self.notifications.values())
+        if openclaw_id is not None:
+            values = [item for item in values if item.openclaw_id == openclaw_id]
+        if order_id is not None:
+            values = [item for item in values if item.order_id == order_id]
+        return values
+
     def _normalize_subscription(self, value: str) -> str:
         normalized = (value or "").strip().lower()
         if normalized not in self.OPENCLAW_SUBSCRIPTION_STATUSES:
@@ -1765,6 +1895,122 @@ class MarketplaceService:
             reliability_score=row["reliability_score"],
             latest_feedback=row["latest_feedback"],
         )
+
+    def _persist_reputation_feedback(self, order: OrderView, token_used: int, settled_at: str) -> None:
+        executor_openclaw_id = order.executor_openclaw_id
+        if executor_openclaw_id is None:
+            return
+
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT decision, checklist_result, comment
+                    FROM order_reviews
+                    WHERE order_id = %s
+                    """,
+                    (order.id,),
+                )
+                review_row = cur.fetchone()
+                if review_row is None or (review_row["decision"] or "").lower() != "approved":
+                    conn.rollback()
+                    return
+
+                checklist_result = self._load_json(review_row["checklist_result"])
+                rating = self._extract_feedback_rating(checklist_result)
+                if rating is None:
+                    conn.rollback()
+                    return
+
+                cur.execute(
+                    """
+                    INSERT INTO openclaw_reputation_stats (openclaw_id)
+                    VALUES (%s)
+                    ON CONFLICT(openclaw_id) DO NOTHING
+                    """,
+                    (executor_openclaw_id,),
+                )
+                cur.execute(
+                    """
+                    SELECT total_completed_tasks, average_rating, positive_rate,
+                           avg_completion_time_seconds, avg_token_consumption, latest_feedback
+                    FROM openclaw_reputation_stats
+                    WHERE openclaw_id = %s
+                    FOR UPDATE
+                    """,
+                    (executor_openclaw_id,),
+                )
+                stats_row = cur.fetchone()
+                if stats_row is None:
+                    raise ApiError("PERSISTENCE_ERROR", 500, "OpenClaw reputation row missing after initialization")
+
+                completed_before = int(stats_row["total_completed_tasks"] or 0)
+                completed_after = completed_before + 1
+                average_rating_before = Decimal(str(stats_row["average_rating"] or "0"))
+                positive_rate_before = Decimal(str(stats_row["positive_rate"] or "0"))
+                avg_completion_before = int(stats_row["avg_completion_time_seconds"] or 0)
+                avg_token_before = int(stats_row["avg_token_consumption"] or 0)
+
+                rating_sum_after = (average_rating_before * completed_before) + rating
+                positive_count_before = (positive_rate_before / Decimal("100")) * completed_before
+                positive_count_after = positive_count_before + (Decimal("1") if rating >= Decimal("4.00") else Decimal("0"))
+                average_rating_after = (rating_sum_after / completed_after).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                positive_rate_after = ((positive_count_after / completed_after) * Decimal("100")).quantize(
+                    Decimal("0.01"),
+                    rounding=ROUND_HALF_UP,
+                )
+                completion_seconds = self._estimate_completion_seconds(order, settled_at)
+                avg_completion_after = round(
+                    ((avg_completion_before * completed_before) + completion_seconds) / completed_after
+                )
+                avg_token_after = round(((avg_token_before * completed_before) + token_used) / completed_after)
+                latest_feedback = (review_row["comment"] or "").strip() or stats_row["latest_feedback"]
+
+                cur.execute(
+                    """
+                    UPDATE openclaw_reputation_stats
+                    SET total_completed_tasks = %s,
+                        average_rating = %s,
+                        positive_rate = %s,
+                        avg_completion_time_seconds = %s,
+                        avg_token_consumption = %s,
+                        latest_feedback = %s,
+                        updated_at = %s::timestamptz
+                    WHERE openclaw_id = %s
+                    """,
+                    (
+                        completed_after,
+                        average_rating_after,
+                        positive_rate_after,
+                        avg_completion_after,
+                        avg_token_after,
+                        latest_feedback,
+                        settled_at,
+                        executor_openclaw_id,
+                    ),
+                )
+            conn.commit()
+
+    @staticmethod
+    def _extract_feedback_rating(checklist_result: dict[str, Any]) -> Decimal | None:
+        raw_rating = checklist_result.get("rating")
+        if raw_rating is None and checklist_result.get("all_passed") is True:
+            raw_rating = 5
+        if raw_rating is None:
+            return None
+        try:
+            rating = Decimal(str(raw_rating))
+        except Exception:
+            return None
+        if rating < Decimal("1.00") or rating > Decimal("5.00"):
+            return None
+        return rating.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    def _estimate_completion_seconds(self, order: OrderView, settled_at: str) -> int:
+        started_at = order.started_at or order.acknowledged_at or order.assigned_at or order.published_at
+        if started_at is None:
+            return 0
+        return max(0, int((self._parse_iso_datetime(settled_at) - self._parse_iso_datetime(started_at)).total_seconds()))
 
     @staticmethod
     def _hash(plain: str) -> str:
@@ -1987,11 +2233,21 @@ class MarketplaceService:
             """
             DO $$
             BEGIN
+                IF EXISTS (SELECT 1 FROM pg_type WHERE typname = 'order_status') THEN
+                    ALTER TYPE order_status ADD VALUE IF NOT EXISTS 'changes_requested';
+                    ALTER TYPE order_status ADD VALUE IF NOT EXISTS 'rejected';
+                END IF;
+                IF EXISTS (SELECT 1 FROM pg_type WHERE typname = 'order_review_decision') THEN
+                    ALTER TYPE order_review_decision ADD VALUE IF NOT EXISTS 'request_changes';
+                    ALTER TYPE order_review_decision ADD VALUE IF NOT EXISTS 'rejected';
+                END IF;
                 IF EXISTS (SELECT 1 FROM pg_type WHERE typname = 'notification_type') THEN
                     ALTER TYPE notification_type ADD VALUE IF NOT EXISTS 'task_cancelled';
                     ALTER TYPE notification_type ADD VALUE IF NOT EXISTS 'review_expired';
                     ALTER TYPE notification_type ADD VALUE IF NOT EXISTS 'order_failed';
                     ALTER TYPE notification_type ADD VALUE IF NOT EXISTS 'dispute_resolved';
+                    ALTER TYPE notification_type ADD VALUE IF NOT EXISTS 'result_changes_requested';
+                    ALTER TYPE notification_type ADD VALUE IF NOT EXISTS 'result_rejected';
                 END IF;
             END
             $$;
@@ -3143,7 +3399,7 @@ class MarketplaceService:
         candidates = [
             order
             for order in self.orders.values()
-            if order.executor_openclaw_id == openclaw_id and order.status in {"assigned", "acknowledged", "in_progress", "delivered", "reviewing", "approved"}
+            if order.executor_openclaw_id == openclaw_id and order.status in {"assigned", "acknowledged", "in_progress", "delivered", "reviewing", "changes_requested", "approved"}
         ]
         if not candidates:
             return None

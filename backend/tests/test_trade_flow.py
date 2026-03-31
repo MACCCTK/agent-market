@@ -162,6 +162,28 @@ NOTIFICATION_VIEW_KEYS = {
     "updated_at",
 }
 
+NOTIFICATION_DELIVERY_METRICS_KEYS = {
+    "total_notifications",
+    "callback_configured_total",
+    "callback_success_total",
+    "callback_failure_total",
+    "callback_success_rate",
+    "pending_total",
+    "sent_total",
+    "acked_total",
+    "retry_scheduled_total",
+    "dead_letter_total",
+}
+
+NOTIFICATION_ALERT_SUMMARY_KEYS = {
+    "has_alerts",
+    "retry_scheduled_total",
+    "dead_letter_total",
+    "callback_failure_total",
+    "retry_scheduled_notifications",
+    "dead_letter_notifications",
+}
+
 HEARTBEAT_VIEW_KEYS = {
     "openclaw_id",
     "service_status",
@@ -300,6 +322,83 @@ def first_template_id(client: TestClient) -> str:
     return templates[0]["id"]
 
 
+def complete_review_and_settle_order(
+    client: TestClient,
+    *,
+    requester_id: str,
+    requester_headers: dict[str, str],
+    executor_id: str,
+    executor_headers: dict[str, str],
+    template_id: str,
+    title: str,
+    rating: int,
+    note: str,
+    provider_request_id: str,
+) -> str:
+    create_order_resp = client.post(
+        "/api/v1/orders",
+        json={
+            "requester_openclaw_id": requester_id,
+            "task_template_id": template_id,
+            "title": title,
+            "requirement_payload": {"topic": title},
+        },
+        headers=requester_headers,
+    )
+    assert create_order_resp.status_code == 200
+    order_id = create_order_resp.json()["id"]
+
+    accept_resp = client.post(
+        f"/api/v1/openclaws/{executor_id}/orders/{order_id}/accept",
+        headers=executor_headers,
+    )
+    assert accept_resp.status_code == 200
+
+    complete_resp = client.post(
+        f"/api/v1/openclaws/{executor_id}/orders/{order_id}/complete",
+        json={
+            "delivery_note": f"{title} delivered",
+            "deliverable_payload": {"artifact": f"{title}.md"},
+            "result_summary": {"title": title, "status": "done"},
+        },
+        headers=executor_headers,
+    )
+    assert complete_resp.status_code == 200
+
+    approve_resp = client.post(
+        f"/api/v1/openclaws/{requester_id}/orders/{order_id}/receive-result",
+        json={
+            "checklist_result": {"all_passed": True, "rating": rating},
+            "note": note,
+        },
+        headers=requester_headers,
+    )
+    assert approve_resp.status_code == 200
+
+    usage_receipt_resp = client.post(
+        f"/api/v1/orders/{order_id}/usage-receipts",
+        json={
+            "openclaw_id": executor_id,
+            "provider": "openai",
+            "provider_request_id": provider_request_id,
+            "model": "gpt-4.1-mini",
+            "prompt_tokens": 500,
+            "completion_tokens": 200,
+        },
+        headers=executor_headers,
+    )
+    assert usage_receipt_resp.status_code == 200
+    receipt = usage_receipt_resp.json()
+
+    settle_resp = client.post(
+        f"/api/v1/openclaws/{executor_id}/orders/{order_id}/settle",
+        json={"usage_receipt_id": receipt["id"]},
+        headers=executor_headers,
+    )
+    assert settle_resp.status_code == 200
+    return order_id
+
+
 def test_trade_flow_auto_assign_deliver_approve_settle(client: TestClient) -> None:
     requester_id = str(uuid4())
     executor_id = str(uuid4())
@@ -388,6 +487,60 @@ def test_trade_flow_auto_assign_deliver_approve_settle(client: TestClient) -> No
     assert settlement["order_id"] == order_id
     assert settlement["openclaw_id"] == executor_id
     assert settlement["token_used"] == 860
+
+
+def test_settled_feedback_updates_executor_reputation_stats(client: TestClient) -> None:
+    requester_id = str(uuid4())
+    executor_id = str(uuid4())
+    template_id = first_template_id(client)
+
+    _, requester_headers = register_openclaw_actor(client, requester_id, "Requester-Reputation", "available")
+    _, executor_headers = register_openclaw_actor(client, executor_id, "Executor-Reputation", "available")
+
+    before_detail_resp = client.get(f"/api/v1/openclaws/{executor_id}")
+    assert before_detail_resp.status_code == 200
+    assert before_detail_resp.json()["reputation"] == {
+        "total_completed_tasks": 0,
+        "average_rating": 0.0,
+        "positive_rate": 0.0,
+        "reliability_score": 0,
+        "latest_feedback": None,
+    }
+
+    complete_review_and_settle_order(
+        client,
+        requester_id=requester_id,
+        requester_headers=requester_headers,
+        executor_id=executor_id,
+        executor_headers=executor_headers,
+        template_id=template_id,
+        title="First reputation order",
+        rating=5,
+        note="Excellent delivery",
+        provider_request_id="req-reputation-001",
+    )
+    complete_review_and_settle_order(
+        client,
+        requester_id=requester_id,
+        requester_headers=requester_headers,
+        executor_id=executor_id,
+        executor_headers=executor_headers,
+        template_id=template_id,
+        title="Second reputation order",
+        rating=2,
+        note="Needs tighter QA",
+        provider_request_id="req-reputation-002",
+    )
+
+    executor_detail_resp = client.get(f"/api/v1/openclaws/{executor_id}")
+    assert executor_detail_resp.status_code == 200
+    assert executor_detail_resp.json()["reputation"] == {
+        "total_completed_tasks": 2,
+        "average_rating": 3.5,
+        "positive_rate": 50.0,
+        "reliability_score": 0,
+        "latest_feedback": "Needs tighter QA",
+    }
 
 
 
@@ -1538,6 +1691,256 @@ def test_notification_retry_worker_promotes_to_dead_letter_after_retry_limit(cli
     assert refreshed["status"] == "dead_letter"
     assert refreshed["retry_count"] == 2
     assert refreshed["next_retry_at"] is None
+
+
+def test_notification_delivery_metrics_and_alert_surfaces(client: TestClient) -> None:
+    requester_id = str(uuid4())
+    retry_executor_id = str(uuid4())
+    dead_executor_id = str(uuid4())
+    template_id = first_template_id(client)
+
+    _, requester_headers = register_openclaw_actor(client, requester_id, "Requester-Notify-Metrics", "available")
+    _, retry_executor_headers = register_openclaw_actor(client, retry_executor_id, "Executor-Notify-Retry-Metric", "available")
+
+    retry_profile_resp = client.post(
+        f"/api/v1/openclaws/{retry_executor_id}/profile",
+        json={"callback_url": "http://127.0.0.1:1/retry"},
+        headers=retry_executor_headers,
+    )
+    assert retry_profile_resp.status_code == 200
+
+    create_retry_order_resp = client.post(
+        "/api/v1/orders",
+        json={
+            "requester_openclaw_id": requester_id,
+            "task_template_id": template_id,
+            "title": "Metrics retry notification",
+            "requirement_payload": {"need": "retry"},
+        },
+        headers=requester_headers,
+    )
+    assert create_retry_order_resp.status_code == 200
+
+    _, dead_executor_headers = register_openclaw_actor(client, dead_executor_id, "Executor-Notify-Dead-Metric", "available")
+    dead_profile_resp = client.post(
+        f"/api/v1/openclaws/{dead_executor_id}/profile",
+        json={"callback_url": "http://127.0.0.1:1/dead"},
+        headers=dead_executor_headers,
+    )
+    assert dead_profile_resp.status_code == 200
+
+    create_dead_order_resp = client.post(
+        "/api/v1/orders",
+        json={
+            "requester_openclaw_id": requester_id,
+            "task_template_id": template_id,
+            "title": "Metrics dead letter notification",
+            "requirement_payload": {"need": "dead-letter"},
+        },
+        headers=requester_headers,
+    )
+    assert create_dead_order_resp.status_code == 200
+
+    service = main_module.service
+    assert service is not None
+    service._notification_max_retries = 2
+
+    dead_notifications_resp = client.get(
+        f"/api/v1/openclaws/{dead_executor_id}/notifications",
+        headers=dead_executor_headers,
+    )
+    assert dead_notifications_resp.status_code == 200
+    dead_notification = next(
+        item for item in dead_notifications_resp.json() if item["notification_type"] == "task_assigned"
+    )
+    update_notification_retry_due_in_service(dead_notification["id"], next_retry_at="2026-03-30T00:00:00Z")
+
+    retry_process_resp = client.post("/api/v1/notifications/process-retries")
+    assert retry_process_resp.status_code == 200
+    assert retry_process_resp.json()["dead_letter"] == 1
+
+    metrics_resp = client.get("/api/v1/notifications/delivery-metrics")
+    assert metrics_resp.status_code == 200
+    metrics = metrics_resp.json()
+    assert_exact_keys(metrics, NOTIFICATION_DELIVERY_METRICS_KEYS)
+    assert metrics == {
+        "total_notifications": 2,
+        "callback_configured_total": 2,
+        "callback_success_total": 0,
+        "callback_failure_total": 2,
+        "callback_success_rate": 0.0,
+        "pending_total": 0,
+        "sent_total": 0,
+        "acked_total": 0,
+        "retry_scheduled_total": 1,
+        "dead_letter_total": 1,
+    }
+
+    alerts_resp = client.get("/api/v1/notifications/alerts")
+    assert alerts_resp.status_code == 200
+    alerts = alerts_resp.json()
+    assert_exact_keys(alerts, NOTIFICATION_ALERT_SUMMARY_KEYS)
+    assert alerts["has_alerts"] is True
+    assert alerts["retry_scheduled_total"] == 1
+    assert alerts["dead_letter_total"] == 1
+    assert alerts["callback_failure_total"] == 2
+    assert len(alerts["retry_scheduled_notifications"]) == 1
+    assert len(alerts["dead_letter_notifications"]) == 1
+    assert alerts["retry_scheduled_notifications"][0]["openclaw_id"] == retry_executor_id
+    assert alerts["dead_letter_notifications"][0]["openclaw_id"] == dead_executor_id
+
+
+def test_request_changes_allows_resubmission_with_new_deliverable_version(client: TestClient) -> None:
+    requester_id = str(uuid4())
+    executor_id = str(uuid4())
+    template_id = first_template_id(client)
+
+    _, requester_headers = register_openclaw_actor(client, requester_id, "Requester-Review-Changes", "available")
+    _, executor_headers = register_openclaw_actor(client, executor_id, "Executor-Review-Changes", "available")
+
+    create_order_resp = client.post(
+        "/api/v1/orders",
+        json={
+            "requester_openclaw_id": requester_id,
+            "task_template_id": template_id,
+            "title": "Needs revisions",
+            "requirement_payload": {"topic": "review loop"},
+        },
+        headers=requester_headers,
+    )
+    assert create_order_resp.status_code == 200
+    order_id = create_order_resp.json()["id"]
+
+    accept_resp = client.post(f"/api/v1/openclaws/{executor_id}/orders/{order_id}/accept", headers=executor_headers)
+    assert accept_resp.status_code == 200
+
+    first_complete_resp = client.post(
+        f"/api/v1/openclaws/{executor_id}/orders/{order_id}/complete",
+        json={
+            "delivery_note": "first draft",
+            "deliverable_payload": {"artifact": "draft-v1"},
+            "result_summary": {"version": 1},
+        },
+        headers=executor_headers,
+    )
+    assert first_complete_resp.status_code == 200
+    assert first_complete_resp.json()["status"] == "reviewing"
+
+    review_resp = client.post(
+        f"/api/v1/orders/{order_id}/acceptance/review",
+        json={
+            "requester_openclaw_id": requester_id,
+            "decision": "request_changes",
+            "checklist_result": {"missing": ["citations"]},
+            "comment": "Please add citations and tighten structure",
+        },
+        headers=requester_headers,
+    )
+    assert review_resp.status_code == 200
+    reviewed_order = review_resp.json()
+    assert reviewed_order["status"] == "changes_requested"
+
+    executor_notifications_resp = client.get(
+        f"/api/v1/openclaws/{executor_id}/notifications",
+        headers=executor_headers,
+    )
+    assert executor_notifications_resp.status_code == 200
+    assert any(
+        item["notification_type"] == "result_changes_requested"
+        for item in executor_notifications_resp.json()
+    )
+
+    second_complete_resp = client.post(
+        f"/api/v1/openclaws/{executor_id}/orders/{order_id}/complete",
+        json={
+            "delivery_note": "revised draft",
+            "deliverable_payload": {"artifact": "draft-v2"},
+            "result_summary": {"version": 2},
+        },
+        headers=executor_headers,
+    )
+    assert second_complete_resp.status_code == 200
+    assert second_complete_resp.json()["status"] == "reviewing"
+
+    service = main_module.service
+    assert service is not None
+    deliverables = service.deliverables[UUID(order_id)]
+    assert [item.version_no for item in deliverables] == [1, 2]
+    assert deliverables[-1].delivery_note == "revised draft"
+
+    approve_resp = client.post(
+        f"/api/v1/openclaws/{requester_id}/orders/{order_id}/receive-result",
+        json={"checklist_result": {"all_passed": True, "rating": 5}, "note": "approved after revision"},
+        headers=requester_headers,
+    )
+    assert approve_resp.status_code == 200
+    assert approve_resp.json()["status"] == "approved"
+
+
+def test_reject_marks_order_terminal_and_blocks_resubmission(client: TestClient) -> None:
+    requester_id = str(uuid4())
+    executor_id = str(uuid4())
+    template_id = first_template_id(client)
+
+    _, requester_headers = register_openclaw_actor(client, requester_id, "Requester-Review-Reject", "available")
+    _, executor_headers = register_openclaw_actor(client, executor_id, "Executor-Review-Reject", "available")
+
+    create_order_resp = client.post(
+        "/api/v1/orders",
+        json={
+            "requester_openclaw_id": requester_id,
+            "task_template_id": template_id,
+            "title": "Rejectable order",
+            "requirement_payload": {"topic": "terminal review"},
+        },
+        headers=requester_headers,
+    )
+    assert create_order_resp.status_code == 200
+    order_id = create_order_resp.json()["id"]
+
+    accept_resp = client.post(f"/api/v1/openclaws/{executor_id}/orders/{order_id}/accept", headers=executor_headers)
+    assert accept_resp.status_code == 200
+
+    complete_resp = client.post(
+        f"/api/v1/openclaws/{executor_id}/orders/{order_id}/complete",
+        json={
+            "delivery_note": "draft to reject",
+            "deliverable_payload": {"artifact": "rejected-v1"},
+            "result_summary": {"version": 1},
+        },
+        headers=executor_headers,
+    )
+    assert complete_resp.status_code == 200
+    assert complete_resp.json()["status"] == "reviewing"
+
+    reject_resp = client.post(
+        f"/api/v1/orders/{order_id}/acceptance/review",
+        json={
+            "requester_openclaw_id": requester_id,
+            "decision": "reject",
+            "checklist_result": {"reason": "does_not_meet_spec"},
+            "comment": "Rejected without resubmission",
+        },
+        headers=requester_headers,
+    )
+    assert reject_resp.status_code == 200
+    rejected_order = reject_resp.json()
+    assert rejected_order["status"] == "rejected"
+
+    executor_detail_resp = client.get(f"/api/v1/openclaws/{executor_id}")
+    assert executor_detail_resp.status_code == 200
+    assert executor_detail_resp.json()["runtime"]["service_status"] == "available"
+
+    resubmit_resp = client.post(
+        f"/api/v1/openclaws/{executor_id}/orders/{order_id}/complete",
+        json={
+            "delivery_note": "should not resubmit",
+            "deliverable_payload": {"artifact": "rejected-v2"},
+            "result_summary": {"version": 2},
+        },
+        headers=executor_headers,
+    )
+    assert resubmit_resp.status_code == 409
 
 
 def test_resolve_dispute_with_requester_refund_releases_executor(client: TestClient) -> None:

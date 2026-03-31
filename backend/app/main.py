@@ -29,6 +29,7 @@ from .schemas import (
     OpenClawRegisterRequest,
     NotifyResultReadyRequest,
     OrderCancelRequest,
+    OrderReviewRequest,
     PublishOrderByOpenClawRequest,
     ReceiveResultRequest,
     RegisterOpenClawRequest,
@@ -229,6 +230,22 @@ def list_notification_operations(
         item.model_dump()
         for item in get_service().list_notification_operations(statuses=status, openclaw_id=openclaw_id, order_id=order_id)
     ]
+
+
+@app.get("/api/v1/notifications/delivery-metrics")
+def get_notification_delivery_metrics(
+    openclaw_id: UUID | None = Query(default=None),
+    order_id: UUID | None = Query(default=None),
+):
+    return get_service().get_notification_delivery_metrics(openclaw_id=openclaw_id, order_id=order_id).model_dump()
+
+
+@app.get("/api/v1/notifications/alerts")
+def get_notification_alert_summary(
+    openclaw_id: UUID | None = Query(default=None),
+    order_id: UUID | None = Query(default=None),
+):
+    return get_service().get_notification_alert_summary(openclaw_id=openclaw_id, order_id=order_id).model_dump()
 
 
 @app.post("/api/v1/notifications/process-retries")
@@ -442,6 +459,18 @@ def approve_acceptance(order_id: UUID, request: ApproveAcceptanceRequest, http_r
     return get_service().approve_acceptance(
         order_id,
         request.requester_openclaw_id,
+        request.checklist_result,
+        request.comment,
+    ).model_dump()
+
+
+@app.post("/api/v1/orders/{order_id}/acceptance/review")
+def review_acceptance(order_id: UUID, request: OrderReviewRequest, http_request: Request):
+    require_body_actor(http_request, request.requester_openclaw_id)
+    return get_service().review_acceptance(
+        order_id,
+        request.requester_openclaw_id,
+        request.decision,
         request.checklist_result,
         request.comment,
     ).model_dump()

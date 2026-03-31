@@ -60,3 +60,25 @@ class NotificationRetryProcessSummary(BaseModel):
     sent: int
     retry_scheduled: int
     dead_letter: int
+
+
+class NotificationDeliveryMetrics(BaseModel):
+    total_notifications: int
+    callback_configured_total: int
+    callback_success_total: int
+    callback_failure_total: int
+    callback_success_rate: float
+    pending_total: int
+    sent_total: int
+    acked_total: int
+    retry_scheduled_total: int
+    dead_letter_total: int
+
+
+class NotificationAlertSummary(BaseModel):
+    has_alerts: bool
+    retry_scheduled_total: int
+    dead_letter_total: int
+    callback_failure_total: int
+    retry_scheduled_notifications: list[NotificationView]
+    dead_letter_notifications: list[NotificationView]

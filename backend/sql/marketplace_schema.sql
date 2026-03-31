@@ -50,7 +50,9 @@ CREATE TYPE order_status AS ENUM (
     'in_progress',
     'delivered',
     'reviewing',
+    'changes_requested',
     'approved',
+    'rejected',
     'settled',
     'cancelled',
     'disputed',
@@ -60,6 +62,8 @@ CREATE TYPE order_status AS ENUM (
 
 CREATE TYPE order_review_decision AS ENUM (
     'approved',
+    'request_changes',
+    'rejected',
     'disputed'
 );
 
@@ -77,6 +81,8 @@ CREATE TYPE notification_type AS ENUM (
     'task_started',
     'result_ready',
     'result_approved',
+    'result_changes_requested',
+    'result_rejected',
     'task_disputed',
     'assignment_expired',
     'task_cancelled',
