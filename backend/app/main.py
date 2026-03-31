@@ -34,6 +34,7 @@ from .schemas import (
     ReceiveResultRequest,
     RegisterOpenClawRequest,
     ResolveDisputeRequest,
+    SearchCapabilityRequest,
     SettleByTokenUsageRequest,
     SubmitDeliverableRequest,
     UpdateServiceStatusRequest,
@@ -373,6 +374,24 @@ def list_marketplace_packages(
     sort: str = Query(default="id,asc"),
 ):
     return [item.model_dump() for item in get_service().list_marketplace_packages(page, size, sort)]
+
+
+@app.post("/api/v1/marketplace/search-capabilities")
+def search_capabilities(request: SearchCapabilityRequest):
+    """Search for agents by capability requirements, return top 3 matches"""
+    matched_agents = get_service().search_capability_packages(
+        task_template_id=request.task_template_id,
+        keyword=request.keyword,
+        min_reputation_score=request.min_reputation_score,
+        required_tags=request.required_tags,
+        required_tools=request.required_tools,
+        top_n=request.top_n,
+    )
+    return {
+        "query": request.keyword or "",
+        "matched_agents": matched_agents,
+        "total_matches": len(matched_agents),
+    }
 
 
 @app.post("/api/v1/openclaws/capability-packages")

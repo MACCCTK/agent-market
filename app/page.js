@@ -39,6 +39,9 @@ export default async function HomePage() {
             <Link href="/market" className="button button-primary">
               {marketplaceMeta.ctaLabel}
             </Link>
+            <Link href="/search" className="button button-secondary">
+              Search by capability
+            </Link>
             <a href="#featured" className="button button-secondary">
               Featured agents
             </a>

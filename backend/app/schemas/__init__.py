@@ -1,5 +1,6 @@
 from .auth import OpenClawAuthResponse, OpenClawIdentityView, OpenClawLoginRequest, OpenClawRegisterRequest
 from .capability_packages import CapabilityPackageDetail, CapabilityPackageView, CreateCapabilityPackageRequest
+from .capability_search import AgentCapabilityMatch, SearchCapabilityRequest, SearchCapabilityResult
 from .common import ApiErrorResponse, PaginationQuery, PriceRangeMixin, SearchOpenClawQuery
 from .deliverables import DeliverableView, SubmitDeliverableRequest
 from .disputes import CreateDisputeRequest, DisputeView, ResolveDisputeRequest
@@ -47,6 +48,7 @@ from .settlements import (
 from .task_templates import TaskTemplateView
 
 __all__ = [
+    "AgentCapabilityMatch",
     "ApiErrorResponse",
     "ApproveAcceptanceRequest",
     "AssignOrderRequest",
@@ -87,6 +89,8 @@ __all__ = [
     "ReceiveResultRequest",
     "ResolveDisputeRequest",
     "RegisterOpenClawRequest",
+    "SearchCapabilityRequest",
+    "SearchCapabilityResult",
     "SearchOpenClawQuery",
     "SettleByTokenUsageRequest",
     "SettlementFeeView",

@@ -762,6 +762,102 @@ class MarketplaceService:
         active.sort(key=lambda x: x.id, reverse=sort.lower().endswith(",desc"))
         return self._page(active, page, size)
 
+    def search_capability_packages(
+        self,
+        task_template_id: uuid.UUID | None = None,
+        keyword: str | None = None,
+        min_reputation_score: int = 0,
+        required_tags: list[str] | None = None,
+        required_tools: list[str] | None = None,
+        top_n: int = 3,
+    ) -> list[dict[str, Any]]:
+        """Search for agents by capability, returning top N matches with scores"""
+        from .schemas import AgentCapabilityMatch
+        
+        # Get active capability packages
+        active_packages = [p for p in self.capability_packages.values() if p.status.lower() == "active"]
+        
+        # Filter by task template if specified
+        if task_template_id is not None:
+            active_packages = [p for p in active_packages if p.task_template_id == task_template_id]
+        
+        matches = []
+        keyword_norm = (keyword or "").strip().lower()
+        
+        for pkg in active_packages:
+            owner_id = pkg.owner_openclaw_id
+            owner = self.openclaws.get(owner_id)
+            if owner is None:
+                continue
+            
+            # Skip unavailable agents
+            if owner.subscription_status != "subscribed" or owner.service_status != "available":
+                continue
+            
+            # Calculate match score
+            score = 100.0
+            
+            # Keyword matching on title and summary
+            if keyword_norm:
+                title_match = keyword_norm in pkg.title.lower()
+                summary_match = keyword_norm in pkg.summary.lower()
+                if not (title_match or summary_match):
+                    score -= 30
+                else:
+                    score += 10 if title_match else 5
+            
+            # Reputation score filtering
+            reputation = self._load_openclaw_reputation_view(owner_id)
+            if reputation.reliability_score < min_reputation_score:
+                continue
+            
+            # Add reputation bonus to score
+            score += (reputation.reliability_score / 100.0) * 20
+            score += (float(reputation.average_rating) / 5.0) * 10
+            
+            # Check required tags if specified
+            if required_tags:
+                capabilities = self._load_openclaw_capability_view(owner_id)
+                capability_tags = set(capabilities.skill_tags or [])
+                required_set = set(t.strip().lower() for t in required_tags)
+                matching_tags = len(required_set & {t.lower() for t in capability_tags})
+                if matching_tags == 0:
+                    continue
+                score += (matching_tags / len(required_set)) * 15
+            
+            # Check required tools if specified
+            if required_tools:
+                capabilities = self._load_openclaw_capability_view(owner_id)
+                available_tools = set(capabilities.pre_installed_tools or [])
+                required_set = set(t.strip().lower() for t in required_tools)
+                matching_tools = len(required_set & {t.lower() for t in available_tools})
+                if matching_tools == 0:
+                    continue
+                score += (matching_tools / len(required_set)) * 15
+            
+            profile = self.openclaw_profiles.get(owner_id)
+            match = AgentCapabilityMatch(
+                agent_id=owner_id,
+                agent_name=owner.name,
+                agent_service_status=owner.service_status,
+                agent_subscription_status=owner.subscription_status,
+                capacity_per_week=profile.capacity_per_week if profile else 1,
+                capability_package_id=pkg.id,
+                package_title=pkg.title,
+                package_summary=pkg.summary,
+                price_min=pkg.price_min,
+                price_max=pkg.price_max,
+                reputation_score=reputation.reliability_score,
+                average_rating=reputation.average_rating,
+                total_completed_tasks=reputation.total_completed_tasks,
+                match_score=min(100.0, max(0.0, score)),
+            )
+            matches.append((match, score))
+        
+        # Sort by score descending and return top N
+        matches.sort(key=lambda x: x[1], reverse=True)
+        return [m[0].model_dump() for m in matches[:top_n]]
+
     def create_owner_capability_package(
         self,
         owner_openclaw_id: uuid.UUID,
