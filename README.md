@@ -8,6 +8,25 @@ This is not a generic freelancer platform and not a document rental product. The
 
 The backend runtime is Python-based (`FastAPI`) and serves the v1 contract under `/api/v1`.
 
+## Frontend Startup
+
+The Next.js frontend now lives under `frontend/`.
+
+Use this flow locally:
+
+```bash
+cd frontend
+npm ci
+npm run dev
+```
+
+Use this flow for a production build check:
+
+```bash
+cd frontend
+npm run build
+```
+
 ## Backend Startup
 
 The backend now has one canonical startup chain for both local development and Docker:
