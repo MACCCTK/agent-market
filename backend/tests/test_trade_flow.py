@@ -284,7 +284,25 @@ def register_openclaw_actor(
     service_status: str = "available",
 ) -> tuple[dict, dict[str, str]]:
     profile = register_openclaw(client, openclaw_id, name, service_status)
-    return profile, bootstrap_openclaw_auth_headers(client, openclaw_id)
+    headers = bootstrap_openclaw_auth_headers(client, openclaw_id)
+    if service_status == "available":
+        heartbeat_resp = client.post(
+            f"/api/v1/openclaws/{openclaw_id}/heartbeat",
+            json={"service_status": "available"},
+            headers=headers,
+        )
+        assert heartbeat_resp.status_code == 200
+    return profile, headers
+
+
+def set_openclaw_last_heartbeat_in_service(openclaw_id: str, heartbeat_at: str) -> None:
+    service = main_module.service
+    assert service is not None
+
+    openclaw_uuid = UUID(openclaw_id)
+    runtime = service.openclaws[openclaw_uuid]
+    service.openclaws[openclaw_uuid] = runtime.model_copy(update={"updated_at": heartbeat_at})
+    service._persist_openclaw_runtime(runtime, last_heartbeat_at=heartbeat_at)
 
 
 def expire_order_deadline_in_service(order_id: str, *, assignment: bool = False, review: bool = False) -> None:
@@ -1302,7 +1320,7 @@ def test_order_cancel_releases_executor_and_notifies_counterparty(client: TestCl
     assert any(item["notification_type"] == "task_cancelled" for item in notifications_resp.json())
 
 
-def test_assignment_expiry_reassigns_order_and_releases_previous_executor(client: TestClient) -> None:
+def test_assignment_expiry_expires_selected_order_and_releases_previous_executor(client: TestClient) -> None:
     requester_id = str(uuid4())
     executor_one_id = str(uuid4())
     executor_two_id = str(uuid4())
@@ -1349,11 +1367,11 @@ def test_assignment_expiry_reassigns_order_and_releases_previous_executor(client
 
     expire_resp = client.post(f"/api/v1/orders/{order['id']}/expire-assignment")
     assert expire_resp.status_code == 200
-    reassigned = expire_resp.json()
-    assert_exact_keys(reassigned, ORDER_VIEW_KEYS)
-    assert reassigned["status"] == "assigned"
-    assert reassigned["executor_openclaw_id"] == executor_two_id
-    assert reassigned["assignment_attempt_count"] == 2
+    expired = expire_resp.json()
+    assert_exact_keys(expired, ORDER_VIEW_KEYS)
+    assert expired["status"] == "expired"
+    assert expired["executor_openclaw_id"] is None
+    assert expired["assignment_attempt_count"] == 1
 
     executor_one_detail_resp = client.get(f"/api/v1/openclaws/{executor_one_id}")
     assert executor_one_detail_resp.status_code == 200
@@ -1361,7 +1379,7 @@ def test_assignment_expiry_reassigns_order_and_releases_previous_executor(client
 
     executor_two_detail_resp = client.get(f"/api/v1/openclaws/{executor_two_id}")
     assert executor_two_detail_resp.status_code == 200
-    assert executor_two_detail_resp.json()["runtime"]["service_status"] == "busy"
+    assert executor_two_detail_resp.json()["runtime"]["service_status"] == "available"
 
     previous_executor_notifications = client.get(
         f"/api/v1/openclaws/{executor_one_id}/notifications",
@@ -1375,7 +1393,147 @@ def test_assignment_expiry_reassigns_order_and_releases_previous_executor(client
         headers=executor_two_headers,
     )
     assert next_executor_notifications.status_code == 200
-    assert any(item["notification_type"] == "task_assigned" for item in next_executor_notifications.json())
+    assert not any(item["notification_type"] == "task_assigned" for item in next_executor_notifications.json())
+
+
+def test_heartbeat_does_not_auto_assign_published_order(client: TestClient) -> None:
+    requester_id = str(uuid4())
+    executor_id = str(uuid4())
+    template_id = first_template_id(client)
+
+    _, requester_headers = register_openclaw_actor(client, requester_id, "Requester-Heartbeat", "available")
+    _, executor_headers = register_openclaw_actor(client, executor_id, "Executor-Heartbeat", "offline")
+
+    create_order_resp = client.post(
+        "/api/v1/orders",
+        json={
+            "requester_openclaw_id": requester_id,
+            "task_template_id": template_id,
+            "title": "Pending after no executor",
+            "requirement_payload": {"mode": "manual"},
+        },
+        headers=requester_headers,
+    )
+    assert create_order_resp.status_code == 200
+    created = create_order_resp.json()
+    assert created["status"] == "published"
+    assert created["executor_openclaw_id"] is None
+
+    heartbeat_resp = client.post(
+        f"/api/v1/openclaws/{executor_id}/heartbeat",
+        json={"service_status": "available"},
+        headers=executor_headers,
+    )
+    assert heartbeat_resp.status_code == 200
+    heartbeat = heartbeat_resp.json()
+    assert heartbeat["service_status"] == "available"
+    assert heartbeat["assigned_order"] is None
+
+    service = main_module.service
+    assert service is not None
+    order = service.orders[UUID(created["id"])]
+    assert order.status == "published"
+    assert order.executor_openclaw_id is None
+
+
+def test_create_order_rejects_selected_executor_with_stale_heartbeat(client: TestClient) -> None:
+    requester_id = str(uuid4())
+    executor_id = str(uuid4())
+    template_id = first_template_id(client)
+
+    _, requester_headers = register_openclaw_actor(client, requester_id, "Requester-Stale-Selected", "available")
+    _, executor_headers = register_openclaw_actor(client, executor_id, "Executor-Stale-Selected", "available")
+
+    package_resp = client.post(
+        "/api/v1/openclaws/capability-packages",
+        json={
+            "owner_openclaw_id": executor_id,
+            "title": "Stale selected package",
+            "summary": "Capability package for stale executor",
+            "task_template_id": template_id,
+            "sample_deliverables": {"type": "report"},
+            "price_min": "5.00",
+            "price_max": "8.00",
+            "capacity_per_week": 3,
+            "status": "active",
+        },
+        headers=executor_headers,
+    )
+    assert package_resp.status_code == 200
+
+    set_openclaw_last_heartbeat_in_service(executor_id, "2026-03-01T00:00:00Z")
+
+    create_order_resp = client.post(
+        "/api/v1/orders",
+        json={
+            "requester_openclaw_id": requester_id,
+            "task_template_id": template_id,
+            "capability_package_id": package_resp.json()["id"],
+            "title": "Select stale executor",
+            "requirement_payload": {"priority": "high"},
+        },
+        headers=requester_headers,
+    )
+    assert create_order_resp.status_code == 409
+    assert create_order_resp.json()["code"] == "OPENCLAW_NOT_AVAILABLE"
+
+
+def test_capability_search_excludes_stale_heartbeat_agents(client: TestClient) -> None:
+    fresh_executor_id = str(uuid4())
+    stale_executor_id = str(uuid4())
+    template_id = first_template_id(client)
+
+    _, fresh_headers = register_openclaw_actor(client, fresh_executor_id, "Executor-Fresh-Search", "available")
+    _, stale_headers = register_openclaw_actor(client, stale_executor_id, "Executor-Stale-Search", "available")
+
+    fresh_package_resp = client.post(
+        "/api/v1/openclaws/capability-packages",
+        json={
+            "owner_openclaw_id": fresh_executor_id,
+            "title": "Fresh analysis package",
+            "summary": "Performs analysis with live heartbeats",
+            "task_template_id": template_id,
+            "sample_deliverables": {"type": "report"},
+            "price_min": "5.00",
+            "price_max": "8.00",
+            "capacity_per_week": 3,
+            "status": "active",
+        },
+        headers=fresh_headers,
+    )
+    assert fresh_package_resp.status_code == 200
+
+    stale_package_resp = client.post(
+        "/api/v1/openclaws/capability-packages",
+        json={
+            "owner_openclaw_id": stale_executor_id,
+            "title": "Stale analysis package",
+            "summary": "Performs analysis but heartbeat is stale",
+            "task_template_id": template_id,
+            "sample_deliverables": {"type": "report"},
+            "price_min": "5.00",
+            "price_max": "8.00",
+            "capacity_per_week": 3,
+            "status": "active",
+        },
+        headers=stale_headers,
+    )
+    assert stale_package_resp.status_code == 200
+
+    set_openclaw_last_heartbeat_in_service(stale_executor_id, "2026-03-01T00:00:00Z")
+
+    search_resp = client.post(
+        "/api/v1/marketplace/search-capabilities",
+        json={
+            "task_template_id": template_id,
+            "keyword": "analysis",
+            "top_n": 3,
+        },
+    )
+    assert search_resp.status_code == 200
+    matched_ids = {item["agent_id"] for item in search_resp.json()["matched_agents"]}
+    assert fresh_executor_id in matched_ids
+    assert stale_executor_id not in matched_ids
 
 
 def test_review_expiry_marks_order_expired_and_releases_executor(client: TestClient) -> None:
@@ -1539,8 +1697,8 @@ def test_deadline_worker_processes_due_assignment_expiry(client: TestClient) -> 
     assert summary["review_processed"] == 0
 
     refreshed = service.orders[UUID(order["id"])]
-    assert refreshed.status == "assigned"
-    assert str(refreshed.executor_openclaw_id) == executor_two_id
+    assert refreshed.status == "expired"
+    assert refreshed.executor_openclaw_id is None
 
 
 def test_deadline_worker_processes_due_review_expiry(client: TestClient) -> None:

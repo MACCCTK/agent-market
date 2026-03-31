@@ -108,6 +108,7 @@ class MarketplaceService:
         self._notification_retry_interval_seconds = self._load_notification_retry_interval_seconds()
         self._notification_retry_backoff_seconds = self._load_notification_retry_backoff_seconds()
         self._notification_max_retries = self._load_notification_max_retries()
+        self._heartbeat_ttl_seconds = self._load_heartbeat_ttl_seconds()
 
         self._ensure_tables()
         self._seed_templates()
@@ -460,33 +461,11 @@ class MarketplaceService:
     def heartbeat_openclaw(self, openclaw_id: uuid.UUID, service_status: str) -> HeartbeatView:
         current = self._require_openclaw(openclaw_id)
         normalized_status = self._normalize_service_status(service_status)
-        assigned_order: OrderView | None = None
-        active_order_id = current.active_order_id
-
-        if normalized_status == "available" and current.active_order_id is None and current.subscription_status == "subscribed":
-            candidate_runtime = current.model_copy(
-                update={
-                    "service_status": normalized_status,
-                    "active_order_id": active_order_id,
-                    "updated_at": self._now_iso(),
-                }
-            )
-            self.openclaws[openclaw_id] = candidate_runtime
-            try:
-                pending = self._find_pending_order_for_heartbeat(openclaw_id)
-                if pending is not None:
-                    assigned_order = self.assign_order(pending.id, openclaw_id)
-                    active_order_id = assigned_order.id
-                    normalized_status = "busy"
-                current = candidate_runtime
-            except Exception:
-                self.openclaws[openclaw_id] = current
-                raise
 
         updated = current.model_copy(
             update={
                 "service_status": normalized_status,
-                "active_order_id": active_order_id,
+                "active_order_id": current.active_order_id,
                 "updated_at": self._now_iso(),
             }
         )
@@ -496,7 +475,7 @@ class MarketplaceService:
             openclaw_id=openclaw_id,
             service_status=updated.service_status,
             active_order_id=updated.active_order_id,
-            assigned_order=assigned_order,
+            assigned_order=None,
             checked_at=self._now_iso(),
         )
 
@@ -793,6 +772,8 @@ class MarketplaceService:
             # Skip unavailable agents
             if owner.subscription_status != "subscribed" or owner.service_status != "available":
                 continue
+            if not self._has_fresh_heartbeat(owner_id):
+                continue
             
             # Calculate match score
             score = 100.0
@@ -913,6 +894,7 @@ class MarketplaceService:
             if pkg is None:
                 raise ApiError("CAPABILITY_PACKAGE_NOT_FOUND", 404, "Capability package not found")
             executor_openclaw_id = pkg.owner_openclaw_id
+            self._require_assignable_executor(executor_openclaw_id, requester_openclaw_id)
 
         now = self._now_iso()
         view = OrderView(
@@ -954,7 +936,7 @@ class MarketplaceService:
         try:
             return self.assign_order(view.id, executor_openclaw_id)
         except ApiError as ex:
-            if ex.code in self.AUTO_ASSIGNMENT_RECOVERABLE_CODES:
+            if executor_openclaw_id is None and ex.code in self.AUTO_ASSIGNMENT_RECOVERABLE_CODES:
                 return self._require_order(view.id)
             raise
 
@@ -1043,6 +1025,29 @@ class MarketplaceService:
             "assignment_expired",
             {"requester_openclaw_id": order.requester_openclaw_id},
         )
+
+        if order.capability_package_id is not None:
+            expired_at = self._now_iso()
+            expired = republished.model_copy(
+                update={
+                    "status": "expired",
+                    "expired_at": expired_at,
+                    "updated_at": expired_at,
+                }
+            )
+            self.orders[order_id] = expired
+            self._persist_order_snapshot(expired)
+            self._create_notification(
+                order.requester_openclaw_id,
+                expired,
+                "assignment_expired",
+                {
+                    "previous_executor_openclaw_id": previous_executor_id,
+                    "reassigned": False,
+                    "selection_required": True,
+                },
+            )
+            return expired
 
         try:
             replacement = self._find_available_executor(
@@ -1544,6 +1549,8 @@ class MarketplaceService:
             raise ApiError("OPENCLAW_NOT_SUBSCRIBED", 409, "OpenClaw is not subscribed")
         if openclaw.service_status != "available":
             raise ApiError("OPENCLAW_NOT_AVAILABLE", 409, "OpenClaw is not available")
+        if not self._has_fresh_heartbeat(openclaw.id):
+            raise ApiError("OPENCLAW_NOT_AVAILABLE", 409, "OpenClaw heartbeat is stale")
         return openclaw
 
     def _find_available_executor(
@@ -1559,6 +1566,7 @@ class MarketplaceService:
             and o.id not in excluded
             and o.subscription_status == "subscribed"
             and o.service_status == "available"
+            and self._has_fresh_heartbeat(o.id)
         ]
         if not candidates:
             raise ApiError("OPENCLAW_NONE_AVAILABLE", 409, "No available OpenClaw executor")
@@ -1635,6 +1643,15 @@ class MarketplaceService:
         return value if value > 0 else 3
 
     @staticmethod
+    def _load_heartbeat_ttl_seconds() -> int:
+        raw = (os.getenv("MARKETPLACE_HEARTBEAT_TTL_SECONDS") or "120").strip()
+        try:
+            value = int(raw)
+        except ValueError:
+            return 120
+        return value if value > 0 else 120
+
+    @staticmethod
     def _parse_iso_datetime(raw: str) -> datetime:
         normalized = raw.replace("Z", "+00:00")
         return datetime.fromisoformat(normalized).astimezone(UTC)
@@ -1643,18 +1660,6 @@ class MarketplaceService:
         if raw_deadline is None:
             return False
         return self._parse_iso_datetime(raw_deadline) <= reference_time
-
-    def _find_pending_order_for_heartbeat(self, executor_openclaw_id: uuid.UUID) -> OrderView | None:
-        candidates = [
-            o
-            for o in self.orders.values()
-            if o.status == "published"
-            and o.requester_openclaw_id != executor_openclaw_id
-            and (o.executor_openclaw_id is None or o.executor_openclaw_id == executor_openclaw_id)
-        ]
-        if not candidates:
-            return None
-        return sorted(candidates, key=lambda x: (x.created_at, x.id))[0]
 
     def _create_assignment_notification(self, openclaw_id: uuid.UUID, order: OrderView) -> NotificationView:
         return self._create_notification(
@@ -1917,6 +1922,21 @@ class MarketplaceService:
         if row is None:
             return None
         return self._as_iso(row["last_heartbeat_at"])
+
+    def _has_fresh_heartbeat(
+        self,
+        openclaw_id: uuid.UUID,
+        *,
+        reference_time: datetime | None = None,
+        last_heartbeat_at: str | None = None,
+    ) -> bool:
+        heartbeat_at = last_heartbeat_at if last_heartbeat_at is not None else self._load_last_heartbeat_at(openclaw_id)
+        if not heartbeat_at:
+            return False
+        checked_at = reference_time or datetime.now(UTC)
+        heartbeat_time = self._parse_iso_datetime(heartbeat_at)
+        freshness_deadline = checked_at - timedelta(seconds=self._heartbeat_ttl_seconds)
+        return heartbeat_time >= freshness_deadline
 
     def _load_openclaw_profile_detail(self, openclaw_id: uuid.UUID) -> OpenClawProfileDetail:
         if not self._openclaw_profiles_has_modern_columns:
