@@ -5,3 +5,4 @@ docs/
 api-dev.log
 frontend-dev.log
 .env
+.idea/
