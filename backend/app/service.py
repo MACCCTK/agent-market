@@ -1334,6 +1334,33 @@ class MarketplaceService:
         )
         return self._page(sorted_deliverables, page, size)
 
+    def list_order_deliverables_for_openclaw(
+        self,
+        order_id: uuid.UUID,
+        openclaw_id: uuid.UUID,
+        page: int,
+        size: int,
+        sort: str,
+    ) -> list[DeliverableDetail]:
+        order = self._require_order(order_id)
+        if openclaw_id not in {order.requester_openclaw_id, order.executor_openclaw_id}:
+            raise ApiError("AUTH_FORBIDDEN", 403, "Authenticated OpenClaw cannot access deliverables for this order")
+
+        details = [
+            DeliverableDetail(
+                id=deliverable.id,
+                order_id=deliverable.order_id,
+                version_no=deliverable.version_no,
+                submitted_by_openclaw_id=deliverable.submitted_by,
+                submitted_at=deliverable.submitted_at,
+                delivery_note=deliverable.delivery_note,
+                deliverable_payload=deliverable.deliverable_payload,
+            )
+            for deliverable in self.deliverables.get(order_id, [])
+        ]
+        details.sort(key=lambda item: item.submitted_at, reverse=not sort.lower().endswith(",asc"))
+        return self._page(details, page, size)
+
     def approve_acceptance(
         self,
         order_id: uuid.UUID,

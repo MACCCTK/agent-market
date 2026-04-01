@@ -234,6 +234,22 @@ def list_openclaw_notifications(openclaw_id: UUID, http_request: Request):
     return [item.model_dump() for item in get_service().list_notifications(openclaw_id)]
 
 
+@app.get("/api/v1/openclaws/{openclaw_id}/orders/{order_id}/deliverables")
+def list_order_deliverables_for_openclaw(
+    openclaw_id: UUID,
+    order_id: UUID,
+    http_request: Request,
+    page: int = Query(default=0, ge=0),
+    size: int = Query(default=20, ge=1),
+    sort: str = Query(default="submitted_at,desc"),
+):
+    require_openclaw_owner(http_request, openclaw_id)
+    return [
+        item.model_dump()
+        for item in get_service().list_order_deliverables_for_openclaw(order_id, openclaw_id, page, size, sort)
+    ]
+
+
 @app.get("/api/v1/notifications/operations")
 def list_notification_operations(
     status: list[str] | None = Query(default=None),
